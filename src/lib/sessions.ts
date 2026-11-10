@@ -74,7 +74,11 @@ export async function createSession(input: {
     expiresAt: Date.now() + SESSION_TTL_MS,
   };
   store.sessions[token] = session;
-  await persist(store);
+  try {
+    await persist(store);
+  } catch {
+    // Memory session still valid for this isolate if DB write fails
+  }
   return { token, session };
 }
 
@@ -105,11 +109,13 @@ export function adminSecretsMatch(presented: string): {
   ok: boolean;
   simulated: boolean;
 } {
-  const expected = process.env.APP_ADMIN_TOKEN?.trim();
-  if (!expected || !presented) {
+  // Trim + strip wrapping quotes sometimes pasted into Secrets UI
+  const expected = process.env.APP_ADMIN_TOKEN?.trim().replace(/^["']|["']$/g, "");
+  const got = presented.trim().replace(/^["']|["']$/g, "");
+  if (!expected || !got) {
     return { ok: false, simulated: false };
   }
-  return { ok: secretsEqual(presented, expected), simulated: false };
+  return { ok: secretsEqual(got, expected), simulated: false };
 }
 
 function secretsEqual(a: string, b: string): boolean {

@@ -149,13 +149,40 @@ export default function GeoApp() {
           setError("Неверный пароль. Проверьте APP_ADMIN_TOKEN в Secrets.");
         } else if (json.error === "rate_limited") {
           setError(json.detail || "Слишком много попыток, подождите.");
+        } else if (json.reason === "csrf" || json.reason === "origin") {
+          setError(
+            json.detail ||
+              "Браузер заблокировал вход. Обновите страницу (Ctrl+Shift+R) и войдите снова.",
+          );
         } else {
-          setError(json.detail || json.error || "Неверный логин");
+          setError(
+            json.detail ||
+              (json.reason
+                ? `${json.error}: ${json.reason}`
+                : json.error) ||
+              "Неверный логин",
+          );
         }
         return;
       }
-      setAppToken(json.token as string);
+      if (!json.token || typeof json.token !== "string") {
+        setError("Сервер не выдал сессию. Попробуйте ещё раз.");
+        return;
+      }
+      setAppToken(json.token);
       setTokenInput("");
+      const stateRes = await apiGet("/api/state");
+      if (!stateRes.ok) {
+        const st = await stateRes.json().catch(() => ({}));
+        clearAppToken();
+        setError(
+          st.detail ||
+            st.error ||
+            `Вход принят, но данные не загрузились (${stateRes.status}).`,
+        );
+        setNeedsToken(true);
+        return;
+      }
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ошибка входа");

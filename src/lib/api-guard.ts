@@ -105,30 +105,18 @@ export function requireCsrf(req: Request): NextResponse | null {
     return null;
   }
 
+  // Bearer sessions are not cookie-auth; custom header is enough CSRF defense.
+  // Do not compare Origin to Host — on Cursor/app hosts they often differ via proxy.
   const header = req.headers.get("x-requested-with");
   if (header !== CSRF_VALUE) {
     return NextResponse.json(
-      { error: "forbidden", reason: "csrf" },
+      {
+        error: "forbidden",
+        reason: "csrf",
+        detail: "Запрос без защитного заголовка. Обновите страницу и попробуйте снова.",
+      },
       { status: 403 },
     );
-  }
-
-  const origin = req.headers.get("origin");
-  const host = req.headers.get("host");
-  if (origin && host) {
-    try {
-      if (new URL(origin).host !== host) {
-        return NextResponse.json(
-          { error: "forbidden", reason: "origin" },
-          { status: 403 },
-        );
-      }
-    } catch {
-      return NextResponse.json(
-        { error: "forbidden", reason: "origin" },
-        { status: 403 },
-      );
-    }
   }
   return null;
 }
