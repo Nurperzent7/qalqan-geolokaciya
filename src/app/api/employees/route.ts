@@ -1,16 +1,18 @@
 import { NextResponse } from "next/server";
 import { guardManage, guardRead } from "@/lib/api-guard";
-import { getStore, setCollection } from "@/lib/store";
+import { ensureStoreReady, getStore, setCollection } from "@/lib/store";
 
 export async function GET(req: Request) {
   const auth = await guardRead(req);
   if (auth instanceof NextResponse) return auth;
+  await ensureStoreReady();
   return NextResponse.json(getStore().employees);
 }
 
 export async function PATCH(req: Request) {
   const auth = await guardManage(req);
   if (auth instanceof NextResponse) return auth;
+  await ensureStoreReady();
   const body = (await req.json()) as {
     employee_id?: string;
     collection_enabled?: boolean;

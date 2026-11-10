@@ -1,15 +1,41 @@
 import { NextResponse } from "next/server";
 import { guardManage, isPreview } from "@/lib/api-guard";
 import { hasBitrixWebhook } from "@/lib/bitrix";
-import { getStore, syncDayToBitrix } from "@/lib/store";
+import { rateLimit } from "@/lib/rate-limit";
+import { ensureStoreReady, getStore, syncDayToBitrix } from "@/lib/store";
 
 export async function POST(req: Request) {
   const auth = await guardManage(req);
   if (auth instanceof NextResponse) return auth;
+  await ensureStoreReady();
 
-  const body = (await req.json()) as { employee_id?: string };
-  if (!body.employee_id) {
+  const limited = rateLimit(`sync:${auth.email}`, 6, 60_000);
+  if (!limited.ok) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "rate_limited",
+        detail: `Слишком часто. Повторите через ${limited.retryAfterSec} с.`,
+      },
+      {
+        status: 429,
+        headers: { "Retry-After": String(limited.retryAfterSec) },
+      },
+    );
+  }
+
+  let body: { employee_id?: string };
+  try {
+    body = (await req.json()) as { employee_id?: string };
+  } catch {
+    return NextResponse.json({ error: "invalid json" }, { status: 400 });
+  }
+
+  if (!body.employee_id || typeof body.employee_id !== "string") {
     return NextResponse.json({ error: "employee_id required" }, { status: 400 });
+  }
+  if (body.employee_id.length > 64) {
+    return NextResponse.json({ error: "employee_id too long" }, { status: 400 });
   }
 
   const exists = getStore().employees.some((e) => e.id === body.employee_id);
@@ -17,7 +43,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "unknown employee" }, { status: 404 });
   }
 
-  // Preview hosts must not punch production Bitrix
   if (isPreview(auth) && hasBitrixWebhook()) {
     return NextResponse.json(
       {

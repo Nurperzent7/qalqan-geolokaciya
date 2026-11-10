@@ -4,19 +4,60 @@ import {
   MAX_POINTS_PER_BATCH,
   guardManage,
 } from "@/lib/api-guard";
-import { ingestPoints } from "@/lib/store";
+import { rateLimit } from "@/lib/rate-limit";
+import { ensureStoreReady, ingestPoints } from "@/lib/store";
 import type { RawPoint } from "@/lib/types";
+
+const MAX_BODY_BYTES = 256_000;
 
 export async function POST(req: Request) {
   const auth = await guardManage(req);
   if (auth instanceof NextResponse) return auth;
+  await ensureStoreReady();
 
-  const contentLength = Number(req.headers.get("content-length") || "0");
-  if (contentLength > 256_000) {
-    return NextResponse.json({ error: "payload too large" }, { status: 413 });
+  const limited = rateLimit(`points:${auth.email}`, 30, 60_000);
+  if (!limited.ok) {
+    return NextResponse.json(
+      { error: "rate_limited", retry_after: limited.retryAfterSec },
+      {
+        status: 429,
+        headers: { "Retry-After": String(limited.retryAfterSec) },
+      },
+    );
   }
 
-  const body = (await req.json()) as { points?: RawPoint[] };
+  // Do not trust Content-Length alone — read with a hard byte cap
+  const reader = req.body?.getReader();
+  if (!reader) {
+    return NextResponse.json({ error: "empty body" }, { status: 400 });
+  }
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      try {
+        await reader.cancel();
+      } catch {
+        /* ignore */
+      }
+      return NextResponse.json({ error: "payload too large" }, { status: 413 });
+    }
+    chunks.push(value);
+  }
+
+  const text = new TextDecoder().decode(Buffer.concat(chunks.map((c) => Buffer.from(c))));
+  let body: { points?: RawPoint[] };
+  try {
+    body = JSON.parse(text) as { points?: RawPoint[] };
+  } catch {
+    return NextResponse.json({ error: "invalid json" }, { status: 400 });
+  }
+
   if (!Array.isArray(body.points) || !body.points.length) {
     return NextResponse.json({ error: "points required" }, { status: 400 });
   }
@@ -27,7 +68,6 @@ export async function POST(req: Request) {
     );
   }
 
-  // sanitize fields — ignore unexpected extras / clamp numbers
   const cleaned: RawPoint[] = [];
   for (const raw of body.points) {
     if (
@@ -53,7 +93,7 @@ export async function POST(req: Request) {
       wifi_bssid:
         typeof raw.wifi_bssid === "string" ? raw.wifi_bssid.slice(0, 32) : null,
       mock: Boolean(raw.mock),
-      battery: Math.min(Math.max(Number(raw.battery) || 0, 0), 1),
+      battery: Math.min(Math.max(Number(raw.battery) || 0, 1), 1),
     });
   }
 

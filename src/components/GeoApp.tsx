@@ -1,7 +1,14 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import {
   MapPinned,
   NotebookPen,
@@ -11,6 +18,7 @@ import {
   RefreshCw,
   Send,
   ShieldAlert,
+  Smartphone,
 } from "lucide-react";
 import type {
   BitrixPunch,
@@ -39,11 +47,12 @@ const MapPanel = dynamic(() => import("./MapPanel"), {
   ),
 });
 
-type Tab = "map" | "journal" | "visits" | "places" | "settings";
+type Tab = "map" | "journal" | "visits" | "places" | "phone" | "settings";
 
 interface StatePayload {
   demo_date: string;
   bitrix_mode: "live" | "mock";
+  persistence?: "postgres" | "memory";
   settings: GeoSettings;
   employees: Employee[];
   places: Place[];
@@ -60,6 +69,7 @@ const TABS: { id: Tab; label: string; icon: typeof MapPinned }[] = [
   { id: "journal", label: "Журнал дня", icon: NotebookPen },
   { id: "visits", label: "Мои визиты", icon: BriefcaseBusiness },
   { id: "places", label: "Справочник мест", icon: Landmark },
+  { id: "phone", label: "Симулятор", icon: Smartphone },
   { id: "settings", label: "Настройки", icon: SlidersHorizontal },
 ];
 
@@ -298,6 +308,9 @@ export default function GeoApp() {
           <div className="flex flex-wrap items-center gap-2">
             <span className="chip">
               {data.bitrix_mode === "mock" ? "Битрикс: демо" : "Битрикс: live"}
+            </span>
+            <span className="chip">
+              {data.persistence === "postgres" ? "БД: Postgres" : "БД: память"}
             </span>
             <span className="chip">День {data.demo_date}</span>
             <button className="btn-ghost" onClick={() => void load()} disabled={busy}>
@@ -580,6 +593,16 @@ export default function GeoApp() {
           </section>
         )}
 
+        {tab === "phone" && (
+          <PhoneSimPanel
+            employeeId={selectedId}
+            employeeName={selected?.name ?? selectedId}
+            places={data.places}
+            onSent={() => void load()}
+            setToast={setToast}
+          />
+        )}
+
         {tab === "settings" && (
           <SettingsPanel
             settings={data.settings}
@@ -594,6 +617,153 @@ export default function GeoApp() {
 
       {toast && <div className="toast">{toast}</div>}
     </div>
+  );
+}
+
+function PhoneSimPanel({
+  employeeId,
+  employeeName,
+  places,
+  onSent,
+  setToast,
+}: {
+  employeeId: string;
+  employeeName: string;
+  places: Place[];
+  onSent: () => void;
+  setToast: (msg: string) => void;
+}) {
+  const [running, setRunning] = useState(false);
+  const [placeId, setPlaceId] = useState("p-office");
+  const [log, setLog] = useState<string[]>([]);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const place = places.find((p) => p.id === placeId) ?? places[0];
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
+
+  async function pushOnce(atPlace: Place, moving: boolean) {
+    const jitter = () => (Math.random() - 0.5) * 0.00025;
+    const point = {
+      device_id: `sim-${employeeId}`,
+      employee_id: employeeId,
+      ts: new Date().toISOString(),
+      lat: atPlace.lat + jitter(),
+      lon: atPlace.lon + jitter(),
+      accuracy_m: 12 + Math.round(Math.random() * 8),
+      speed_mps: moving ? 1.2 : 0,
+      is_moving: moving,
+      wifi_bssid:
+        atPlace.type === "office" ? atPlace.bssid_list[0] ?? null : null,
+      mock: false,
+      battery: 0.82,
+    };
+    const res = await apiMutate("/api/points", {
+      method: "POST",
+      body: { points: [point] },
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      setToast(json.error || "Ошибка отправки точки");
+      stop();
+      return;
+    }
+    setLog((prev) =>
+      [
+        `${new Date().toLocaleTimeString("ru-RU", { timeZone: "Asia/Qyzylorda" })} · ${atPlace.name} · +${json.added}`,
+        ...prev,
+      ].slice(0, 12),
+    );
+    onSent();
+  }
+
+  function stop() {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = null;
+    setRunning(false);
+  }
+
+  function start() {
+    if (!place) return;
+    stop();
+    setRunning(true);
+    void pushOnce(place, false);
+    timerRef.current = setInterval(() => {
+      const p = places.find((x) => x.id === placeId) ?? place;
+      void pushOnce(p, false);
+    }, 8_000);
+  }
+
+  return (
+    <section className="grid gap-4 lg:grid-cols-2">
+      <div>
+        <h2 className="section-title">Симулятор телефона</h2>
+        <p className="section-lead">
+          Имитация фоновой геолокации для {employeeName}: точки уходят на сервер
+          каждые 8 сек (как пачки с телефона).
+        </p>
+        <div className="mt-4 space-y-3 border border-[var(--line)] bg-[var(--panel)] p-4">
+          <label className="block text-sm">
+            Место
+            <select
+              className="select mt-1"
+              value={placeId}
+              disabled={running}
+              onChange={(e) => setPlaceId(e.target.value)}
+            >
+              {places
+                .filter((p) => p.status === "approved")
+                .map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {!running ? (
+              <button className="btn" type="button" onClick={start}>
+                Начать сбор
+              </button>
+            ) : (
+              <button className="btn-danger" type="button" onClick={stop}>
+                Остановить
+              </button>
+            )}
+            <button
+              className="btn-ghost"
+              type="button"
+              disabled={!place}
+              onClick={() => place && void pushOnce(place, true)}
+            >
+              Одна точка сейчас
+            </button>
+          </div>
+          <p className="text-xs text-[var(--muted)]">
+            В офисе точка получает BSSID офисного Wi‑Fi. Смените место и
+            перезапустите сбор, чтобы смоделировать визит.
+          </p>
+        </div>
+      </div>
+      <div>
+        <h3 className="font-display text-xl">Лог отправки</h3>
+        {!log.length ? (
+          <p className="mt-2 text-sm text-[var(--muted)]">Пока тихо.</p>
+        ) : (
+          <ul className="mt-3 space-y-1 text-sm text-[var(--muted)]">
+            {log.map((line) => (
+              <li key={line} className="border-b border-[var(--line)]/60 py-1">
+                {line}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }
 

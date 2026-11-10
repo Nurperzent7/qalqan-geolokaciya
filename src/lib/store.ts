@@ -1,4 +1,5 @@
 import { punchWorkday } from "./bitrix";
+import { hasDatabase, loadSnapshot, saveSnapshot } from "./db";
 import {
   buildDaySummary,
   detectStays,
@@ -38,7 +39,12 @@ interface StoreState {
   viewerId: string;
 }
 
-const g = globalThis as unknown as { __geoStore?: StoreState };
+const SNAPSHOT_ID = "main";
+const g = globalThis as unknown as {
+  __geoStore?: StoreState;
+  __geoHydrate?: Promise<void>;
+  __geoPersist?: ReturnType<typeof setTimeout>;
+};
 
 function dayKey(employeeId: string, date = DEMO_DATE) {
   return `${employeeId}:${date}`;
@@ -78,8 +84,46 @@ export function getStore(): StoreState {
   return g.__geoStore;
 }
 
+function schedulePersist() {
+  if (!hasDatabase()) return;
+  if (g.__geoPersist) clearTimeout(g.__geoPersist);
+  g.__geoPersist = setTimeout(() => {
+    const state = getStore();
+    void saveSnapshot(SNAPSHOT_ID, state).catch(() => {
+      /* ignore transient DB errors */
+    });
+  }, 250);
+}
+
+/** Hydrate from Postgres when DATABASE_URL is set; otherwise seed memory. */
+export async function ensureStoreReady(): Promise<StoreState> {
+  if (!hasDatabase()) {
+    return getStore();
+  }
+  if (!g.__geoHydrate) {
+    g.__geoHydrate = (async () => {
+      const snap = await loadSnapshot<StoreState>(SNAPSHOT_ID);
+      if (
+        snap &&
+        Array.isArray(snap.employees) &&
+        Array.isArray(snap.points) &&
+        snap.settings
+      ) {
+        g.__geoStore = snap;
+        recomputeAll(g.__geoStore);
+      } else {
+        g.__geoStore = createInitial();
+        await saveSnapshot(SNAPSHOT_ID, g.__geoStore);
+      }
+    })();
+  }
+  await g.__geoHydrate;
+  return getStore();
+}
+
 export function resetStore() {
   g.__geoStore = createInitial();
+  schedulePersist();
   return g.__geoStore;
 }
 
@@ -152,6 +196,7 @@ export function updateSettings(patch: Partial<GeoSettings>) {
   const state = getStore();
   state.settings = { ...state.settings, ...patch };
   recomputeAll(state);
+  schedulePersist();
   return state.settings;
 }
 
@@ -166,6 +211,7 @@ export function setCollection(employeeId: string, enabled: boolean) {
   if (!enabled) {
     emp.last_status = "Сбор выключен";
   }
+  schedulePersist();
   return emp;
 }
 
@@ -175,6 +221,7 @@ export function approvePlace(placeId: string) {
   if (!p) return null;
   p.status = "approved";
   recomputeAll(state);
+  schedulePersist();
   return p;
 }
 
@@ -202,6 +249,7 @@ export function linkVisit(visitId: string, caseId: string | null, reject = false
     : null;
 
   recomputeEmployee(state, visit.employee_id);
+  schedulePersist();
   return state.visits.find((v) => v.id === visitId) ?? visit;
 }
 
@@ -231,6 +279,7 @@ export async function syncDayToBitrix(employeeId: string) {
   state.punches.push(open.punch, close.punch);
   day.bitrix_synced = open.ok && close.ok;
   day.status = "final";
+  schedulePersist();
 
   return {
     ok: open.ok && close.ok,
@@ -277,5 +326,6 @@ export function ingestPoints(
   }
   const touched = new Set(batch.map((p) => p.employee_id));
   for (const id of touched) recomputeEmployee(state, id);
+  if (added > 0) schedulePersist();
   return { ok: true as const, added, total: state.points.length };
 }

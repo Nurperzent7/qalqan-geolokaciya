@@ -1,16 +1,18 @@
 import { NextResponse } from "next/server";
 import { guardMutate, guardRead } from "@/lib/api-guard";
-import { getStore, linkVisit } from "@/lib/store";
+import { ensureStoreReady, getStore, linkVisit } from "@/lib/store";
 
 export async function GET(req: Request) {
   const auth = await guardRead(req);
   if (auth instanceof NextResponse) return auth;
+  await ensureStoreReady();
   return NextResponse.json(getStore().visits);
 }
 
 export async function PATCH(req: Request) {
   const auth = await guardMutate(req);
   if (auth instanceof NextResponse) return auth;
+  await ensureStoreReady();
   const body = (await req.json()) as {
     visit_id?: string;
     case_id?: string | null;
