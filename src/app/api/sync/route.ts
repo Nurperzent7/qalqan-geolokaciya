@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { guardEmployeeAction, isPreview } from "@/lib/api-guard";
+import { guardEmployeeAction, isPreview, storeScopeFor } from "@/lib/api-guard";
 import { hasBitrixWebhook } from "@/lib/bitrix";
 import { rateLimit } from "@/lib/rate-limit";
 import { ensureStoreReady, getStore, syncDayToBitrix } from "@/lib/store";
@@ -37,8 +37,9 @@ export async function POST(req: Request) {
     );
   }
 
-  await ensureStoreReady();
-  const exists = getStore().employees.some((e) => e.id === body.employee_id);
+  const scopeId = storeScopeFor(auth);
+  await ensureStoreReady(scopeId);
+  const exists = getStore(scopeId).employees.some((e) => e.id === body.employee_id);
   if (!exists) {
     return NextResponse.json({ error: "unknown employee" }, { status: 404 });
   }
@@ -53,7 +54,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const result = await syncDayToBitrix(body.employee_id);
+  const result = await syncDayToBitrix(scopeId, body.employee_id);
   return NextResponse.json(
     { ...result, actor: auth.email },
     { status: result.ok ? 200 : 400 },

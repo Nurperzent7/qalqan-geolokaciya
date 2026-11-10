@@ -1,19 +1,21 @@
 import { NextResponse } from "next/server";
-import { guardMutate, guardRead } from "@/lib/api-guard";
+import { guardMutate, guardRead, storeScopeFor } from "@/lib/api-guard";
 import { scopeVisits } from "@/lib/scope";
 import { ensureStoreReady, getStore, linkVisit } from "@/lib/store";
 
 export async function GET(req: Request) {
   const auth = await guardRead(req);
   if (auth instanceof NextResponse) return auth;
-  await ensureStoreReady();
-  return NextResponse.json(scopeVisits(getStore().visits, auth));
+  const scopeId = storeScopeFor(auth);
+  await ensureStoreReady(scopeId);
+  return NextResponse.json(scopeVisits(getStore(scopeId).visits, auth));
 }
 
 export async function PATCH(req: Request) {
   const auth = await guardMutate(req);
   if (auth instanceof NextResponse) return auth;
-  await ensureStoreReady();
+  const scopeId = storeScopeFor(auth);
+  await ensureStoreReady(scopeId);
 
   let body: {
     visit_id?: string;
@@ -30,7 +32,7 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: "visit_id required" }, { status: 400 });
   }
 
-  const existing = getStore().visits.find((v) => v.id === body.visit_id);
+  const existing = getStore(scopeId).visits.find((v) => v.id === body.visit_id);
   if (!existing) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
@@ -41,7 +43,12 @@ export async function PATCH(req: Request) {
     );
   }
 
-  const visit = linkVisit(body.visit_id, body.case_id ?? null, Boolean(body.reject));
+  const visit = linkVisit(
+    scopeId,
+    body.visit_id,
+    body.case_id ?? null,
+    Boolean(body.reject),
+  );
   if (!visit) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json(visit);
 }

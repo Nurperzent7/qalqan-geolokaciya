@@ -39,12 +39,30 @@ interface StoreState {
   viewerId: string;
 }
 
-const SNAPSHOT_ID = "main";
 const g = globalThis as unknown as {
-  __geoStore?: StoreState;
-  __geoHydrate?: Promise<void>;
-  __geoPersist?: ReturnType<typeof setTimeout>;
+  __geoStores?: Map<string, StoreState>;
+  __geoHydrate?: Map<string, Promise<void>>;
+  __geoPersist?: Map<string, ReturnType<typeof setTimeout>>;
 };
+
+function stores(): Map<string, StoreState> {
+  if (!g.__geoStores) g.__geoStores = new Map();
+  return g.__geoStores;
+}
+
+function hydrates(): Map<string, Promise<void>> {
+  if (!g.__geoHydrate) g.__geoHydrate = new Map();
+  return g.__geoHydrate;
+}
+
+function persists(): Map<string, ReturnType<typeof setTimeout>> {
+  if (!g.__geoPersist) g.__geoPersist = new Map();
+  return g.__geoPersist;
+}
+
+function snapshotKey(scopeId: string) {
+  return `store:${scopeId}`;
+}
 
 function dayKey(employeeId: string, date = DEMO_DATE) {
   return `${employeeId}:${date}`;
@@ -56,10 +74,14 @@ function createInitial(): StoreState {
   const places = PLACES.map((p) => ({ ...p }));
   const points = [...seedPointsForAskar(), ...seedPointsForAnn()];
   const caseHints: StoreState["caseHints"] = {};
-  // Askar court stay gets auto-linked to case-55
-  caseHints["stay-e-askar-20"] = { id: "case-55", title: "Дело №55 — заседание Спецсуд" };
-  // Ann court linked
-  caseHints["stay-e-ann-3"] = { id: "case-55", title: "Дело №55 — заседание Спецсуд" };
+  caseHints["stay-e-askar-20"] = {
+    id: "case-55",
+    title: "Дело №55 — заседание Спецсуд",
+  };
+  caseHints["stay-e-ann-3"] = {
+    id: "case-55",
+    title: "Дело №55 — заседание Спецсуд",
+  };
 
   const state: StoreState = {
     settings,
@@ -77,69 +99,84 @@ function createInitial(): StoreState {
   return state;
 }
 
-export function getStore(): StoreState {
-  if (!g.__geoStore) {
-    g.__geoStore = createInitial();
+export function getStore(scopeId: string): StoreState {
+  const map = stores();
+  let state = map.get(scopeId);
+  if (!state) {
+    state = createInitial();
+    map.set(scopeId, state);
   }
-  return g.__geoStore;
+  return state;
 }
 
-function schedulePersist() {
+function schedulePersist(scopeId: string) {
   if (!hasDatabase()) return;
-  if (g.__geoPersist) clearTimeout(g.__geoPersist);
-  g.__geoPersist = setTimeout(() => {
-    const state = getStore();
-    void saveSnapshot(SNAPSHOT_ID, state).catch(() => {
-      /* ignore transient DB errors */
-    });
-  }, 250);
+  const map = persists();
+  const prev = map.get(scopeId);
+  if (prev) clearTimeout(prev);
+  map.set(
+    scopeId,
+    setTimeout(() => {
+      const state = getStore(scopeId);
+      void saveSnapshot(snapshotKey(scopeId), state).catch(() => {
+        /* ignore */
+      });
+    }, 250),
+  );
 }
 
-/** Hydrate from Postgres when DATABASE_URL is set; otherwise seed memory. */
-export async function ensureStoreReady(): Promise<StoreState> {
+/** Per-session / per-visitor sandbox. Never shares one global snapshot across visitors. */
+export async function ensureStoreReady(scopeId: string): Promise<StoreState> {
+  if (!scopeId) throw new Error("store scope required");
   if (!hasDatabase()) {
-    return getStore();
+    return getStore(scopeId);
   }
-  if (!g.__geoHydrate) {
-    g.__geoHydrate = (async () => {
-      const snap = await loadSnapshot<StoreState>(SNAPSHOT_ID);
-      if (
-        snap &&
-        Array.isArray(snap.employees) &&
-        Array.isArray(snap.points) &&
-        snap.settings
-      ) {
-        g.__geoStore = snap;
-        recomputeAll(g.__geoStore);
-      } else {
-        g.__geoStore = createInitial();
-        await saveSnapshot(SNAPSHOT_ID, g.__geoStore);
-      }
-    })();
+  const h = hydrates();
+  if (!h.has(scopeId)) {
+    h.set(
+      scopeId,
+      (async () => {
+        const snap = await loadSnapshot<StoreState>(snapshotKey(scopeId));
+        if (
+          snap &&
+          Array.isArray(snap.employees) &&
+          Array.isArray(snap.points) &&
+          snap.settings
+        ) {
+          stores().set(scopeId, snap);
+          recomputeAll(snap);
+        } else {
+          const fresh = createInitial();
+          stores().set(scopeId, fresh);
+          await saveSnapshot(snapshotKey(scopeId), fresh);
+        }
+      })(),
+    );
   }
-  await g.__geoHydrate;
-  return getStore();
+  await h.get(scopeId);
+  return getStore(scopeId);
 }
 
-export function resetStore() {
-  g.__geoStore = createInitial();
-  schedulePersist();
-  return g.__geoStore;
+export function resetStore(scopeId: string) {
+  const fresh = createInitial();
+  stores().set(scopeId, fresh);
+  schedulePersist(scopeId);
+  return fresh;
 }
 
 function recomputeEmployee(state: StoreState, employeeId: string) {
-  const office = state.places.find((p) => p.type === "office" && p.status === "approved");
+  const office = state.places.find(
+    (p) => p.type === "office" && p.status === "approved",
+  );
   if (!office) return;
 
   const pts = state.points.filter((p) => p.employee_id === employeeId);
   const stays = detectStays(pts, state.places, state.settings, employeeId);
   const officeInts = officeIntervals(pts, office, state.settings);
 
-  // enrich case hints by matching stay ids freshly
   const hints: Record<string, { id: string; title: string } | null> = {};
   for (const s of stays) {
     if (state.caseHints[s.id]) hints[s.id] = state.caseHints[s.id];
-    // also match by place+rough time for seed stability
     if (!hints[s.id] && s.place_id === "p-court") {
       hints[s.id] = { id: "case-55", title: "Дело №55 — заседание Спецсуд" };
       state.caseHints[s.id] = hints[s.id];
@@ -151,10 +188,11 @@ function recomputeEmployee(state: StoreState, employeeId: string) {
     ...hints,
   });
 
-  // keep manually linked visits from previous compute
   for (const v of state.visits.filter((x) => x.employee_id === employeeId)) {
     if (v.status === "linked" && v.link_method === "employee") {
-      const idx = visits.findIndex((x) => x.start === v.start && x.place_id === v.place_id);
+      const idx = visits.findIndex(
+        (x) => x.start === v.start && x.place_id === v.place_id,
+      );
       if (idx >= 0) visits[idx] = { ...v };
     }
   }
@@ -175,7 +213,6 @@ function recomputeEmployee(state: StoreState, employeeId: string) {
   );
   state.days[dayKey(employeeId)] = summary;
 
-  // update last position
   const emp = state.employees.find((e) => e.id === employeeId);
   if (emp && pts.length) {
     const last = [...pts].sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts))[0];
@@ -192,16 +229,20 @@ function recomputeAll(state: StoreState) {
   for (const id of ids) recomputeEmployee(state, id);
 }
 
-export function updateSettings(patch: Partial<GeoSettings>) {
-  const state = getStore();
+export function updateSettings(scopeId: string, patch: Partial<GeoSettings>) {
+  const state = getStore(scopeId);
   state.settings = { ...state.settings, ...patch };
   recomputeAll(state);
-  schedulePersist();
+  schedulePersist(scopeId);
   return state.settings;
 }
 
-export function setCollection(employeeId: string, enabled: boolean) {
-  const state = getStore();
+export function setCollection(
+  scopeId: string,
+  employeeId: string,
+  enabled: boolean,
+) {
+  const state = getStore(scopeId);
   const emp = state.employees.find((e) => e.id === employeeId);
   if (!emp) return null;
   emp.collection_enabled = enabled;
@@ -211,22 +252,27 @@ export function setCollection(employeeId: string, enabled: boolean) {
   if (!enabled) {
     emp.last_status = "Сбор выключен";
   }
-  schedulePersist();
+  schedulePersist(scopeId);
   return emp;
 }
 
-export function approvePlace(placeId: string) {
-  const state = getStore();
+export function approvePlace(scopeId: string, placeId: string) {
+  const state = getStore(scopeId);
   const p = state.places.find((x) => x.id === placeId);
   if (!p) return null;
   p.status = "approved";
   recomputeAll(state);
-  schedulePersist();
+  schedulePersist(scopeId);
   return p;
 }
 
-export function linkVisit(visitId: string, caseId: string | null, reject = false) {
-  const state = getStore();
+export function linkVisit(
+  scopeId: string,
+  visitId: string,
+  caseId: string | null,
+  reject = false,
+) {
+  const state = getStore(scopeId);
   const visit = state.visits.find((v) => v.id === visitId);
   if (!visit) return null;
 
@@ -249,12 +295,12 @@ export function linkVisit(visitId: string, caseId: string | null, reject = false
     : null;
 
   recomputeEmployee(state, visit.employee_id);
-  schedulePersist();
+  schedulePersist(scopeId);
   return state.visits.find((v) => v.id === visitId) ?? visit;
 }
 
-export async function syncDayToBitrix(employeeId: string) {
-  const state = getStore();
+export async function syncDayToBitrix(scopeId: string, employeeId: string) {
+  const state = getStore(scopeId);
   const emp = state.employees.find((e) => e.id === employeeId);
   const day = state.days[dayKey(employeeId)];
   if (!emp || !day || !day.first_in || !day.last_out) {
@@ -279,7 +325,7 @@ export async function syncDayToBitrix(employeeId: string) {
   state.punches.push(open.punch, close.punch);
   day.bitrix_synced = open.ok && close.ok;
   day.status = "final";
-  schedulePersist();
+  schedulePersist(scopeId);
 
   return {
     ok: open.ok && close.ok,
@@ -291,6 +337,7 @@ export async function syncDayToBitrix(employeeId: string) {
 }
 
 export function ingestPoints(
+  scopeId: string,
   batch: RawPoint[],
   limits: { maxBatch: number; maxStore: number },
 ) {
@@ -299,10 +346,10 @@ export function ingestPoints(
       ok: false as const,
       error: `batch too large (max ${limits.maxBatch})`,
       added: 0,
-      total: getStore().points.length,
+      total: getStore(scopeId).points.length,
     };
   }
-  const state = getStore();
+  const state = getStore(scopeId);
   if (state.points.length >= limits.maxStore) {
     return {
       ok: false as const,
@@ -318,7 +365,6 @@ export function ingestPoints(
   for (const p of batch) {
     if (added >= room) break;
     if (existing.has(key(p))) continue;
-    // only allow known employees
     if (!state.employees.some((e) => e.id === p.employee_id)) continue;
     state.points.push(p);
     existing.add(key(p));
@@ -326,6 +372,6 @@ export function ingestPoints(
   }
   const touched = new Set(batch.map((p) => p.employee_id));
   for (const id of touched) recomputeEmployee(state, id);
-  if (added > 0) schedulePersist();
+  if (added > 0) schedulePersist(scopeId);
   return { ok: true as const, added, total: state.points.length };
 }

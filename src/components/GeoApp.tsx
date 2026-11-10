@@ -262,9 +262,9 @@ export default function GeoApp() {
           <p className="brand-mark">QALQAN · геолокация</p>
           <h1 className="mt-2 font-display text-2xl text-[var(--ink)]">Вход</h1>
           <p className="mt-2 text-sm text-[var(--muted)]">
-            Админ — секрет APP_ADMIN_TOKEN (локально: admin-dev). Сотрудник —
-            персональный PIN (демо: Аскар 1111, Анна 2222, Нурлан 3333, Дана
-            4444).
+            Админ — пароль из секрета приложения. Сотрудник — персональный PIN
+            (если настроен секрет EMPLOYEE_PIN_HASHES). У каждой сессии свои
+            данные.
           </p>
           <div className="mt-4 flex gap-2">
             <button

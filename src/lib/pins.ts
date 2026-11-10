@@ -1,13 +1,5 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 
-/** Demo employee PINs — sample only; hashes ship, plaintext only for local docs/UI hint. */
-export const DEMO_EMPLOYEE_PINS: Record<string, string> = {
-  "e-askar": "1111",
-  "e-ann": "2222",
-  "e-nurlan": "3333",
-  "e-dana": "4444",
-};
-
 export function hashPin(pin: string, salt?: string): string {
   const s = salt ?? randomBytes(16).toString("hex");
   const hash = scryptSync(pin, s, 32).toString("hex");
@@ -23,12 +15,48 @@ export function verifyPin(pin: string, stored: string): boolean {
   return timingSafeEqual(prev, next);
 }
 
-export function buildDemoPinHashes(): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [id, pin] of Object.entries(DEMO_EMPLOYEE_PINS)) {
-    // fixed salt per id so restarts keep same hash without DB
-    const salt = Buffer.from(`qalqan-pin-${id}`).toString("hex").slice(0, 32);
-    out[id] = hashPin(pin, salt);
+function isDeployedHost(): boolean {
+  return Boolean(process.env.CURSOR_APP_ID || process.env.VERCEL);
+}
+
+/** Hashes from EMPLOYEE_PIN_HASHES secret: { "e-askar": "salt:hash", ... } */
+export function pinHashesFromEnv(): Record<string, string> | null {
+  const raw = process.env.EMPLOYEE_PIN_HASHES?.trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof k === "string" && typeof v === "string" && v.includes(":")) {
+        out[k] = v;
+      }
+    }
+    return Object.keys(out).length ? out : null;
+  } catch {
+    return null;
   }
-  return out;
+}
+
+/**
+ * Production: only env hashes. Local (no CURSOR_APP_ID/VERCEL): any 4–32 char PIN
+ * for a known employee id — no plaintext credentials ship in the repo.
+ */
+export function verifyEmployeeCredential(
+  employeeId: string,
+  pin: string,
+): boolean {
+  if (!pin || pin.length < 4 || pin.length > 64) return false;
+  const hashes = pinHashesFromEnv();
+  if (hashes?.[employeeId]) {
+    return verifyPin(pin, hashes[employeeId]);
+  }
+  if (!isDeployedHost()) {
+    return true;
+  }
+  return false;
+}
+
+export function employeeLoginAvailable(): boolean {
+  return Boolean(pinHashesFromEnv()) || !isDeployedHost();
 }

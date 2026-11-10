@@ -1,19 +1,21 @@
 import { NextResponse } from "next/server";
-import { guardManage, guardRead } from "@/lib/api-guard";
+import { guardManage, guardRead, storeScopeFor } from "@/lib/api-guard";
 import { parseSettingsPatch } from "@/lib/settings-parse";
 import { ensureStoreReady, getStore, updateSettings } from "@/lib/store";
 
 export async function GET(req: Request) {
   const auth = await guardRead(req);
   if (auth instanceof NextResponse) return auth;
-  await ensureStoreReady();
-  return NextResponse.json(getStore().settings);
+  const scopeId = storeScopeFor(auth);
+  await ensureStoreReady(scopeId);
+  return NextResponse.json(getStore(scopeId).settings);
 }
 
 export async function PATCH(req: Request) {
   const auth = await guardManage(req);
   if (auth instanceof NextResponse) return auth;
-  await ensureStoreReady();
+  const scopeId = storeScopeFor(auth);
+  await ensureStoreReady(scopeId);
 
   let body: unknown;
   try {
@@ -27,6 +29,6 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: parsed.error }, { status: 400 });
   }
 
-  const settings = updateSettings(parsed.patch);
+  const settings = updateSettings(scopeId, parsed.patch);
   return NextResponse.json(settings);
 }

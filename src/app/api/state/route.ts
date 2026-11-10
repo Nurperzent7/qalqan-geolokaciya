@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { guardRead } from "@/lib/api-guard";
+import { guardRead, storeScopeFor } from "@/lib/api-guard";
 import { hasBitrixWebhook } from "@/lib/bitrix";
 import { hasDatabase } from "@/lib/db";
 import { DEMO_DATE } from "@/lib/seed";
@@ -19,7 +19,8 @@ export async function GET(req: Request) {
   const auth = await guardRead(req);
   if (auth instanceof NextResponse) return auth;
 
-  const s = await ensureStoreReady();
+  const scopeId = storeScopeFor(auth);
+  const s = await ensureStoreReady(scopeId);
   const employees = scopeEmployees(s.employees, auth);
   const visits = scopeVisits(s.visits, auth);
   const places = scopePlaces(s.places, auth);
@@ -31,6 +32,7 @@ export async function GET(req: Request) {
     demo_date: DEMO_DATE,
     bitrix_mode: hasBitrixWebhook() ? "live" : "mock",
     persistence: hasDatabase() ? "postgres" : "memory",
+    store_scope: scopeId,
     viewer: {
       email: auth.email,
       name: auth.name,
@@ -55,7 +57,7 @@ export async function GET(req: Request) {
     cases,
     viewer_id: auth.employeeId ?? s.viewerId,
     sample_notice: auth.canManage
-      ? "Режим админа: полный доступ. Сотрудники видят только себя."
-      : "Режим сотрудника: только ваши координаты, визиты и журнал.",
+      ? "Админ: изолированная песочница этой сессии (не общая база всех посетителей)."
+      : "Сотрудник: только ваши данные в вашей сессии.",
   });
 }

@@ -4,6 +4,7 @@ import {
   MAX_POINTS_PER_BATCH,
   requireCsrf,
   requireViewer,
+  storeScopeFor,
 } from "@/lib/api-guard";
 import { rateLimit } from "@/lib/rate-limit";
 import { ensureStoreReady, ingestPoints } from "@/lib/store";
@@ -52,7 +53,9 @@ export async function POST(req: Request) {
     chunks.push(value);
   }
 
-  const text = new TextDecoder().decode(Buffer.concat(chunks.map((c) => Buffer.from(c))));
+  const text = new TextDecoder().decode(
+    Buffer.concat(chunks.map((c) => Buffer.from(c))),
+  );
   let body: { points?: RawPoint[] };
   try {
     body = JSON.parse(text) as { points?: RawPoint[] };
@@ -89,7 +92,8 @@ export async function POST(req: Request) {
     );
   }
 
-  await ensureStoreReady();
+  const scopeId = storeScopeFor(viewer);
+  await ensureStoreReady(scopeId);
 
   const cleaned: RawPoint[] = [];
   for (const raw of body.points) {
@@ -121,7 +125,7 @@ export async function POST(req: Request) {
     });
   }
 
-  const result = ingestPoints(cleaned, {
+  const result = ingestPoints(scopeId, cleaned, {
     maxBatch: MAX_POINTS_PER_BATCH,
     maxStore: MAX_POINTS_IN_STORE,
   });

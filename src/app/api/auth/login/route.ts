@@ -1,14 +1,12 @@
 import { NextResponse } from "next/server";
 import { requireCsrf, clientIp } from "@/lib/api-guard";
-import { buildDemoPinHashes, verifyPin } from "@/lib/pins";
-import { rateLimit } from "@/lib/rate-limit";
 import {
-  adminSecretsMatch,
-  createSession,
-} from "@/lib/sessions";
-import { ensureStoreReady, getStore } from "@/lib/store";
-
-const PIN_HASHES = buildDemoPinHashes();
+  employeeLoginAvailable,
+  verifyEmployeeCredential,
+} from "@/lib/pins";
+import { rateLimit } from "@/lib/rate-limit";
+import { EMPLOYEES } from "@/lib/seed";
+import { adminSecretsMatch, createSession } from "@/lib/sessions";
 
 export async function POST(req: Request) {
   const csrf = requireCsrf(req);
@@ -64,12 +62,20 @@ export async function POST(req: Request) {
   }
 
   if (body.role === "employee") {
+    if (!employeeLoginAvailable()) {
+      return NextResponse.json(
+        {
+          error: "employee_login_disabled",
+          detail:
+            "Вход сотрудников выключен: задайте секрет EMPLOYEE_PIN_HASHES или войдите как админ.",
+        },
+        { status: 403 },
+      );
+    }
     const employeeId =
       typeof body.employee_id === "string" ? body.employee_id.slice(0, 64) : "";
-    await ensureStoreReady();
-    const emp = getStore().employees.find((e) => e.id === employeeId);
-    const hash = PIN_HASHES[employeeId];
-    if (!emp || !hash || !verifyPin(password, hash)) {
+    const emp = EMPLOYEES.find((e) => e.id === employeeId);
+    if (!emp || !verifyEmployeeCredential(employeeId, password)) {
       return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
     }
     const { token, session } = await createSession({
@@ -85,5 +91,8 @@ export async function POST(req: Request) {
     });
   }
 
-  return NextResponse.json({ error: "role must be admin or employee" }, { status: 400 });
+  return NextResponse.json(
+    { error: "role must be admin or employee" },
+    { status: 400 },
+  );
 }

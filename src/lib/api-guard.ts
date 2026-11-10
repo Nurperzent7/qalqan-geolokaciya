@@ -177,6 +177,12 @@ export function isPreview(principal: AccessPrincipal): boolean {
   return principal.stage === "preview";
 }
 
+/** Isolate data per login session (public multi-visitor safety). */
+export function storeScopeFor(principal: AccessPrincipal): string {
+  if (principal.sessionId) return `sess:${principal.sessionId}`;
+  return `cursor:${principal.email || "unknown"}`;
+}
+
 export function clientIp(req: Request): string {
   const xf = req.headers.get("x-forwarded-for");
   if (xf) return xf.split(",")[0]?.trim() || "unknown";

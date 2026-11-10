@@ -106,16 +106,10 @@ export function adminSecretsMatch(presented: string): {
   simulated: boolean;
 } {
   const expected = process.env.APP_ADMIN_TOKEN?.trim();
-  const deployed = Boolean(process.env.CURSOR_APP_ID || process.env.VERCEL);
-
-  if (expected) {
-    return { ok: secretsEqual(presented, expected), simulated: false };
+  if (!expected || !presented) {
+    return { ok: false, simulated: false };
   }
-  // local only
-  if (!deployed && presented === "admin-dev") {
-    return { ok: true, simulated: true };
-  }
-  return { ok: false, simulated: false };
+  return { ok: secretsEqual(presented, expected), simulated: false };
 }
 
 function secretsEqual(a: string, b: string): boolean {
