@@ -21,6 +21,7 @@ import type {
   Place,
   Visit,
 } from "@/lib/types";
+import { apiGet, apiMutate } from "@/lib/api-client";
 import { cn, formatMinutes, formatTime } from "@/lib/utils";
 
 const MapPanel = dynamic(() => import("./MapPanel"), {
@@ -67,7 +68,10 @@ export default function GeoApp() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch("/api/state", { cache: "no-store" });
+      const res = await apiGet("/api/state");
+      if (res.status === 401) {
+        throw new Error("Нужен вход в Cursor (приложение private/team)");
+      }
       if (!res.ok) throw new Error("Не удалось загрузить состояние");
       const json = (await res.json()) as StatePayload;
       startTransition(() => {
@@ -104,16 +108,15 @@ export default function GeoApp() {
   async function syncBitrix() {
     setBusy(true);
     try {
-      const res = await fetch("/api/sync", {
+      const res = await apiMutate("/api/sync", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ employee_id: selectedId }),
+        body: { employee_id: selectedId },
       });
       const json = await res.json();
       setToast(
         json.ok
           ? `Отметки ушли в Битрикс (${json.mode === "mock" ? "демо" : "live"})`
-          : json.detail || "Ошибка синхронизации",
+          : json.detail || json.error || "Ошибка синхронизации",
       );
       await load();
     } finally {
@@ -124,10 +127,9 @@ export default function GeoApp() {
   async function linkVisit(visitId: string, caseId: string | null, reject = false) {
     setBusy(true);
     try {
-      await fetch("/api/visits", {
+      await apiMutate("/api/visits", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ visit_id: visitId, case_id: caseId, reject }),
+        body: { visit_id: visitId, case_id: caseId, reject },
       });
       await load();
       setToast(reject ? "Визит помечен как личный" : "Дело привязано");
@@ -137,29 +139,26 @@ export default function GeoApp() {
   }
 
   async function approvePlace(id: string) {
-    await fetch("/api/places", {
+    await apiMutate("/api/places", {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, action: "approve" }),
+      body: { id, action: "approve" },
     });
     await load();
     setToast("Место подтверждено");
   }
 
   async function toggleCollection(employeeId: string, enabled: boolean) {
-    await fetch("/api/employees", {
+    await apiMutate("/api/employees", {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ employee_id: employeeId, collection_enabled: enabled }),
+      body: { employee_id: employeeId, collection_enabled: enabled },
     });
     await load();
   }
 
   async function saveSettings(patch: Partial<GeoSettings>) {
-    await fetch("/api/settings", {
+    await apiMutate("/api/settings", {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
+      body: patch,
     });
     await load();
     setToast("Настройки сохранены, день пересчитан");
@@ -168,7 +167,7 @@ export default function GeoApp() {
   async function resetDemo() {
     setBusy(true);
     try {
-      await fetch("/api/reset", { method: "POST" });
+      await apiMutate("/api/reset", { method: "POST" });
       await load();
       setToast("Демо сброшено");
     } finally {

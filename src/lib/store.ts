@@ -241,17 +241,41 @@ export async function syncDayToBitrix(employeeId: string) {
   };
 }
 
-export function ingestPoints(batch: RawPoint[]) {
+export function ingestPoints(
+  batch: RawPoint[],
+  limits: { maxBatch: number; maxStore: number },
+) {
+  if (batch.length > limits.maxBatch) {
+    return {
+      ok: false as const,
+      error: `batch too large (max ${limits.maxBatch})`,
+      added: 0,
+      total: getStore().points.length,
+    };
+  }
   const state = getStore();
+  if (state.points.length >= limits.maxStore) {
+    return {
+      ok: false as const,
+      error: "point store full",
+      added: 0,
+      total: state.points.length,
+    };
+  }
+  const room = limits.maxStore - state.points.length;
   const key = (p: RawPoint) => `${p.device_id}|${p.ts}`;
   const existing = new Set(state.points.map(key));
   let added = 0;
   for (const p of batch) {
+    if (added >= room) break;
     if (existing.has(key(p))) continue;
+    // only allow known employees
+    if (!state.employees.some((e) => e.id === p.employee_id)) continue;
     state.points.push(p);
+    existing.add(key(p));
     added += 1;
   }
   const touched = new Set(batch.map((p) => p.employee_id));
   for (const id of touched) recomputeEmployee(state, id);
-  return { added, total: state.points.length };
+  return { ok: true as const, added, total: state.points.length };
 }

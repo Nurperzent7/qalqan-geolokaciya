@@ -1,15 +1,25 @@
 import { NextResponse } from "next/server";
+import { guardRead } from "@/lib/api-guard";
 import { hasBitrixWebhook } from "@/lib/bitrix";
 import { DEMO_DATE } from "@/lib/seed";
 import { getStore } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: Request) {
+  const auth = await guardRead(req);
+  if (auth instanceof NextResponse) return auth;
+
   const s = getStore();
   return NextResponse.json({
     demo_date: DEMO_DATE,
     bitrix_mode: hasBitrixWebhook() ? "live" : "mock",
+    viewer: {
+      email: auth.email,
+      name: auth.name,
+      simulated: auth.simulated,
+      stage: auth.stage,
+    },
     settings: s.settings,
     employees: s.employees,
     places: s.places,
@@ -19,6 +29,6 @@ export async function GET() {
     cases: s.cases,
     viewer_id: s.viewerId,
     sample_notice:
-      "Демо-данные Алматы. Подключите BITRIX_WEBHOOK_URL для живых отметок рабочего дня.",
+      "Демо-данные Алматы. Bitrix webhook подключается через секреты приложения.",
   });
 }
