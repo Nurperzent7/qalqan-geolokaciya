@@ -85,7 +85,7 @@ export default function GeoApp() {
   const [data, setData] = useState<StatePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [needsToken, setNeedsToken] = useState(false);
-  const [loginRole, setLoginRole] = useState<"admin" | "employee">("employee");
+  const [loginRole, setLoginRole] = useState<"admin" | "employee">("admin");
   const [loginEmployeeId, setLoginEmployeeId] = useState("e-askar");
   const [tokenInput, setTokenInput] = useState("");
   const [selectedId, setSelectedId] = useState<string>("e-askar");
@@ -141,7 +141,17 @@ export default function GeoApp() {
       });
       const json = await res.json();
       if (!res.ok) {
-        setError(json.detail || json.error || "Неверный логин");
+        if (json.error === "employee_login_disabled") {
+          setError(
+            "Вход сотрудника выключен. Выберите «Админ» и пароль из APP_ADMIN_TOKEN.",
+          );
+        } else if (json.error === "invalid credentials") {
+          setError("Неверный пароль. Проверьте APP_ADMIN_TOKEN в Secrets.");
+        } else if (json.error === "rate_limited") {
+          setError(json.detail || "Слишком много попыток, подождите.");
+        } else {
+          setError(json.detail || json.error || "Неверный логин");
+        }
         return;
       }
       setAppToken(json.token as string);
@@ -269,17 +279,17 @@ export default function GeoApp() {
           <div className="mt-4 flex gap-2">
             <button
               type="button"
-              className={cn("btn-ghost flex-1", loginRole === "employee" && "tab-active")}
-              onClick={() => setLoginRole("employee")}
-            >
-              Сотрудник
-            </button>
-            <button
-              type="button"
               className={cn("btn-ghost flex-1", loginRole === "admin" && "tab-active")}
               onClick={() => setLoginRole("admin")}
             >
               Админ
+            </button>
+            <button
+              type="button"
+              className={cn("btn-ghost flex-1", loginRole === "employee" && "tab-active")}
+              onClick={() => setLoginRole("employee")}
+            >
+              Сотрудник
             </button>
           </div>
           {loginRole === "employee" && (

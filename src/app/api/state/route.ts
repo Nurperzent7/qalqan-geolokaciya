@@ -32,7 +32,6 @@ export async function GET(req: Request) {
     demo_date: DEMO_DATE,
     bitrix_mode: hasBitrixWebhook() ? "live" : "mock",
     persistence: hasDatabase() ? "postgres" : "memory",
-    store_scope: scopeId,
     viewer: {
       email: auth.email,
       name: auth.name,

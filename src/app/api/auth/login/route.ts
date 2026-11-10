@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireCsrf, clientIp } from "@/lib/api-guard";
+import { requireCsrf, rateLimitKey } from "@/lib/api-guard";
 import {
   employeeLoginAvailable,
   verifyEmployeeCredential,
@@ -12,8 +12,7 @@ export async function POST(req: Request) {
   const csrf = requireCsrf(req);
   if (csrf) return csrf;
 
-  const ip = clientIp(req);
-  const limited = rateLimit(`login:${ip}`, 10, 15 * 60_000);
+  const limited = rateLimit(rateLimitKey(req, "login"), 10, 15 * 60_000);
   if (!limited.ok) {
     return NextResponse.json(
       {

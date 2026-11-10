@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { NextResponse } from "next/server";
 import { getIdentity, requireTeamRole } from "../../cursor/identity";
 import { getSession, type Session } from "./sessions";
@@ -177,14 +178,42 @@ export function isPreview(principal: AccessPrincipal): boolean {
   return principal.stage === "preview";
 }
 
-/** Isolate data per login session (public multi-visitor safety). */
+/** Isolate data per login session — hash so the bearer token never becomes a store key. */
 export function storeScopeFor(principal: AccessPrincipal): string {
-  if (principal.sessionId) return `sess:${principal.sessionId}`;
-  return `cursor:${principal.email || "unknown"}`;
+  if (principal.sessionId) {
+    const h = createHash("sha256")
+      .update(principal.sessionId)
+      .digest("hex")
+      .slice(0, 32);
+    return `sess:${h}`;
+  }
+  const email = principal.email || "unknown";
+  const h = createHash("sha256").update(email).digest("hex").slice(0, 32);
+  return `cursor:${h}`;
 }
 
+/**
+ * Prefer platform Real-IP; if only X-Forwarded-For exists, use the last hop
+ * (typically appended by the trusted edge), not the client-spoofable first value.
+ */
 export function clientIp(req: Request): string {
+  const real = req.headers.get("x-real-ip")?.trim();
+  if (real) return real;
   const xf = req.headers.get("x-forwarded-for");
-  if (xf) return xf.split(",")[0]?.trim() || "unknown";
-  return req.headers.get("x-real-ip") || "unknown";
+  if (xf) {
+    const parts = xf
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (parts.length) return parts[parts.length - 1];
+  }
+  return "unknown";
+}
+
+/** Stable rate-limit bucket that is harder to reset by spoofing XFF alone. */
+export function rateLimitKey(req: Request, action: string): string {
+  const ip = clientIp(req);
+  const ua = req.headers.get("user-agent")?.slice(0, 80) || "";
+  const dig = createHash("sha256").update(`${ip}|${ua}`).digest("hex").slice(0, 24);
+  return `${action}:${dig}`;
 }
