@@ -61,6 +61,20 @@ export const EMPLOYEES: Employee[] = [
     last_status: "Сбор выключен",
     last_seen_at: null,
   },
+  {
+    id: "e-aigerim",
+    name: "Айгерим Жумабаева",
+    title: "младший адвокат",
+    practice: "Судебная практика",
+    bitrix_user_id: 18,
+    role: "employee",
+    collection_enabled: true,
+    consent_at: "2026-10-20T09:00:00+05:00",
+    last_lat: 43.2501,
+    last_lon: 76.9412,
+    last_status: "Визит: Прокуратура г. Алматы",
+    last_seen_at: "2026-11-10T14:30:00+05:00",
+  },
 ];
 
 export const PLACES: Place[] = [
@@ -232,6 +246,40 @@ export function seedPointsForAnn(): RawPoint[] {
   }
   for (const hm of ["11:00", "11:30", "12:00", "12:30", "13:00", "14:00", "15:00", "16:00", "16:40"]) {
     points.push(pt("e-ann", hm, court.lat, court.lon));
+  }
+  return points;
+}
+
+/** Aigerim: morning office → prosecutor visit → back */
+export function seedPointsForAigerim(): RawPoint[] {
+  const office = { lat: 43.2567, lon: 76.9286 };
+  const prosecutor = { lat: 43.2501, lon: 76.9412 };
+  const points: RawPoint[] = [];
+  for (const hm of ["09:10", "09:40", "10:10", "10:40"]) {
+    points.push(
+      pt("e-aigerim", hm, office.lat, office.lon, {
+        wifi_bssid: "a4:2b:b0:11:22:33",
+      }),
+    );
+  }
+  for (const hm of [
+    "11:20",
+    "11:50",
+    "12:20",
+    "12:50",
+    "13:20",
+    "13:50",
+    "14:20",
+    "14:30",
+  ]) {
+    points.push(pt("e-aigerim", hm, prosecutor.lat, prosecutor.lon));
+  }
+  for (const hm of ["15:10", "15:40", "16:10", "16:40", "17:10"]) {
+    points.push(
+      pt("e-aigerim", hm, office.lat, office.lon, {
+        wifi_bssid: "a4:2b:b0:11:22:33",
+      }),
+    );
   }
   return points;
 }

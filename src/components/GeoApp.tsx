@@ -36,6 +36,7 @@ import {
   getAppToken,
   setAppToken,
 } from "@/lib/api-client";
+import { EMPLOYEES as DEMO_EMPLOYEES } from "@/lib/seed";
 import { cn, formatMinutes, formatTime } from "@/lib/utils";
 
 const MapPanel = dynamic(() => import("./MapPanel"), {
@@ -327,10 +328,11 @@ export default function GeoApp() {
                 value={loginEmployeeId}
                 onChange={(e) => setLoginEmployeeId(e.target.value)}
               >
-                <option value="e-askar">Аскар Бекенов</option>
-                <option value="e-ann">Анна Серикова</option>
-                <option value="e-nurlan">Нурлан Касымов</option>
-                <option value="e-dana">Дана Омарова</option>
+                {DEMO_EMPLOYEES.map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.name}
+                  </option>
+                ))}
               </select>
             </label>
           )}

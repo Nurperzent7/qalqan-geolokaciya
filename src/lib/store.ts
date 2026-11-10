@@ -12,6 +12,7 @@ import {
   DEMO_DATE,
   EMPLOYEES,
   PLACES,
+  seedPointsForAigerim,
   seedPointsForAnn,
   seedPointsForAskar,
 } from "./seed";
@@ -72,7 +73,11 @@ function createInitial(): StoreState {
   const settings = { ...DEFAULT_SETTINGS };
   const employees = EMPLOYEES.map((e) => ({ ...e }));
   const places = PLACES.map((p) => ({ ...p }));
-  const points = [...seedPointsForAskar(), ...seedPointsForAnn()];
+  const points = [
+    ...seedPointsForAskar(),
+    ...seedPointsForAnn(),
+    ...seedPointsForAigerim(),
+  ];
   const caseHints: StoreState["caseHints"] = {};
   caseHints["stay-e-askar-20"] = {
     id: "case-55",
@@ -81,6 +86,10 @@ function createInitial(): StoreState {
   caseHints["stay-e-ann-3"] = {
     id: "case-55",
     title: "Дело №55 — заседание Спецсуд",
+  };
+  caseHints["stay-e-aigerim-4"] = {
+    id: "case-101",
+    title: "Дело №101 — Нұрлы жол / иск",
   };
 
   const state: StoreState = {
