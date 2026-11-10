@@ -1,0 +1,620 @@
+"use client";
+
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import {
+  MapPinned,
+  NotebookPen,
+  BriefcaseBusiness,
+  Landmark,
+  SlidersHorizontal,
+  RefreshCw,
+  Send,
+  ShieldAlert,
+} from "lucide-react";
+import type {
+  BitrixPunch,
+  CaseOption,
+  DaySummary,
+  Employee,
+  GeoSettings,
+  Place,
+  Visit,
+} from "@/lib/types";
+import { cn, formatMinutes, formatTime } from "@/lib/utils";
+
+const MapPanel = dynamic(() => import("./MapPanel"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center text-sm text-[var(--muted)]">
+      Загрузка карты…
+    </div>
+  ),
+});
+
+type Tab = "map" | "journal" | "visits" | "places" | "settings";
+
+interface StatePayload {
+  demo_date: string;
+  bitrix_mode: "live" | "mock";
+  settings: GeoSettings;
+  employees: Employee[];
+  places: Place[];
+  visits: Visit[];
+  days: Record<string, DaySummary>;
+  punches: BitrixPunch[];
+  cases: CaseOption[];
+  viewer_id: string;
+  sample_notice: string;
+}
+
+const TABS: { id: Tab; label: string; icon: typeof MapPinned }[] = [
+  { id: "map", label: "Карта", icon: MapPinned },
+  { id: "journal", label: "Журнал дня", icon: NotebookPen },
+  { id: "visits", label: "Мои визиты", icon: BriefcaseBusiness },
+  { id: "places", label: "Справочник мест", icon: Landmark },
+  { id: "settings", label: "Настройки", icon: SlidersHorizontal },
+];
+
+export default function GeoApp() {
+  const [tab, setTab] = useState<Tab>("map");
+  const [data, setData] = useState<StatePayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string>("e-askar");
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const [, startTransition] = useTransition();
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/state", { cache: "no-store" });
+      if (!res.ok) throw new Error("Не удалось загрузить состояние");
+      const json = (await res.json()) as StatePayload;
+      startTransition(() => {
+        setData(json);
+        setError(null);
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка загрузки");
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+    const t = setInterval(() => void load(), 30_000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3500);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const day = useMemo(() => {
+    if (!data) return null;
+    return data.days[`${selectedId}:${data.demo_date}`] ?? null;
+  }, [data, selectedId]);
+
+  const myVisits = useMemo(
+    () => data?.visits.filter((v) => v.employee_id === selectedId) ?? [],
+    [data, selectedId],
+  );
+
+  async function syncBitrix() {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ employee_id: selectedId }),
+      });
+      const json = await res.json();
+      setToast(
+        json.ok
+          ? `Отметки ушли в Битрикс (${json.mode === "mock" ? "демо" : "live"})`
+          : json.detail || "Ошибка синхронизации",
+      );
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function linkVisit(visitId: string, caseId: string | null, reject = false) {
+    setBusy(true);
+    try {
+      await fetch("/api/visits", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ visit_id: visitId, case_id: caseId, reject }),
+      });
+      await load();
+      setToast(reject ? "Визит помечен как личный" : "Дело привязано");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function approvePlace(id: string) {
+    await fetch("/api/places", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, action: "approve" }),
+    });
+    await load();
+    setToast("Место подтверждено");
+  }
+
+  async function toggleCollection(employeeId: string, enabled: boolean) {
+    await fetch("/api/employees", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ employee_id: employeeId, collection_enabled: enabled }),
+    });
+    await load();
+  }
+
+  async function saveSettings(patch: Partial<GeoSettings>) {
+    await fetch("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    await load();
+    setToast("Настройки сохранены, день пересчитан");
+  }
+
+  async function resetDemo() {
+    setBusy(true);
+    try {
+      await fetch("/api/reset", { method: "POST" });
+      await load();
+      setToast("Демо сброшено");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (error && !data) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-6">
+        <div className="max-w-md text-center">
+          <ShieldAlert className="mx-auto mb-3 h-8 w-8 text-[var(--accent)]" />
+          <p className="text-lg font-semibold">{error}</p>
+          <button className="btn mt-4" onClick={() => void load()}>
+            Повторить
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-[var(--muted)]">
+        Собираем день…
+      </div>
+    );
+  }
+
+  const selected = data.employees.find((e) => e.id === selectedId);
+
+  return (
+    <div className="min-h-screen">
+      <header className="relative overflow-hidden border-b border-[var(--line)]">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(196,163,90,0.18),transparent_55%),radial-gradient(ellipse_at_bottom_left,rgba(31,75,58,0.22),transparent_50%)]" />
+        <div className="relative mx-auto flex max-w-7xl flex-col gap-4 px-4 py-5 sm:px-6 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <p className="brand-mark">QALQAN · геолокация</p>
+            <h1 className="mt-1 font-display text-3xl tracking-tight text-[var(--ink)] sm:text-4xl">
+              Учёт визитов без Clockster
+            </h1>
+            <p className="mt-2 max-w-2xl text-sm text-[var(--muted)] sm:text-base">
+              Точки с телефона → офис / визиты / чистое время. Отметки прихода и ухода
+              пишутся в Битрикс24 (рабочий день), 2ГИС только для справочника мест.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="chip">
+              {data.bitrix_mode === "mock" ? "Битрикс: демо" : "Битрикс: live"}
+            </span>
+            <span className="chip">День {data.demo_date}</span>
+            <button className="btn-ghost" onClick={() => void load()} disabled={busy}>
+              <RefreshCw className="h-4 w-4" /> Обновить
+            </button>
+            <button className="btn" onClick={() => void syncBitrix()} disabled={busy}>
+              <Send className="h-4 w-4" /> В Битрикс
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6">
+        <div className="mb-4 rounded-lg border border-dashed border-[var(--line)] bg-[var(--panel)]/70 px-3 py-2 text-xs text-[var(--muted)] sm:text-sm">
+          {data.sample_notice}
+        </div>
+
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <nav className="flex gap-1 overflow-x-auto pb-1">
+            {TABS.map((t) => {
+              const Icon = t.icon;
+              return (
+                <button
+                  key={t.id}
+                  className={cn("tab", tab === t.id && "tab-active")}
+                  onClick={() => setTab(t.id)}
+                >
+                  <Icon className="h-4 w-4" />
+                  {t.label}
+                </button>
+              );
+            })}
+          </nav>
+          <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
+            Сотрудник
+            <select
+              className="select"
+              value={selectedId}
+              onChange={(e) => setSelectedId(e.target.value)}
+            >
+              {data.employees.map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {tab === "map" && (
+          <section className="grid gap-4 lg:grid-cols-[1.4fr_0.8fr]">
+            <div className="map-shell h-[420px] overflow-hidden sm:h-[560px]">
+              <MapPanel employees={data.employees} places={data.places} />
+            </div>
+            <aside className="space-y-3">
+              <h2 className="section-title">Сейчас на карте</h2>
+              <p className="section-lead">
+                Статус обновляется пачками (~каждые {data.settings.draft_refresh_min} мин), не
+                секунда в секунду.
+              </p>
+              <ul className="space-y-2">
+                {data.employees.map((e) => (
+                  <li key={e.id}>
+                    <button
+                      className={cn(
+                        "w-full border border-[var(--line)] bg-[var(--panel)] px-3 py-3 text-left transition hover:border-[var(--accent)]",
+                        selectedId === e.id && "border-[var(--accent)] bg-[var(--panel-strong)]",
+                      )}
+                      onClick={() => setSelectedId(e.id)}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="font-medium text-[var(--ink)]">{e.name}</p>
+                          <p className="text-xs text-[var(--muted)]">
+                            {e.title} · {e.practice}
+                          </p>
+                        </div>
+                        <span
+                          className={cn(
+                            "text-[10px] uppercase tracking-wide",
+                            e.collection_enabled ? "text-[var(--ok)]" : "text-[var(--muted)]",
+                          )}
+                        >
+                          {e.collection_enabled ? "сбор" : "выкл"}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm text-[var(--ink)]">{e.last_status}</p>
+                      <p className="text-xs text-[var(--muted)]">
+                        {e.last_seen_at
+                          ? formatTime(e.last_seen_at)
+                          : "нет сигнала"}
+                      </p>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </aside>
+          </section>
+        )}
+
+        {tab === "journal" && (
+          <section className="grid gap-4 lg:grid-cols-[1fr_0.9fr]">
+            <div>
+              <h2 className="section-title">Журнал · {selected?.name}</h2>
+              <p className="section-lead">
+                Приход {formatTime(day?.first_in)} · уход {formatTime(day?.last_out)} · чистое
+                время{" "}
+                <strong className="text-[var(--ink)]">
+                  {formatMinutes(day?.net_minutes ?? 0)}
+                </strong>
+              </p>
+              {!day?.segments.length ? (
+                <p className="mt-6 text-sm text-[var(--muted)]">Нет сегментов за день.</p>
+              ) : (
+                <ol className="mt-4 space-y-2">
+                  {day.segments.map((s, idx) => (
+                    <li
+                      key={`${s.kind}-${s.start}-${idx}`}
+                      className="flex items-start gap-3 border-l-2 border-[var(--accent)] bg-[var(--panel)] px-3 py-3"
+                    >
+                      <div className="min-w-[88px] text-sm tabular-nums text-[var(--muted)]">
+                        {formatTime(s.start)}–{formatTime(s.end)}
+                      </div>
+                      <div>
+                        <p className="font-medium text-[var(--ink)]">{s.label}</p>
+                        <p className="text-xs uppercase tracking-wide text-[var(--muted)]">
+                          {s.kind}
+                        </p>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+            <div className="space-y-4">
+              <div className="border border-[var(--line)] bg-[var(--panel)] p-4">
+                <h3 className="font-display text-xl">Итог дня</h3>
+                <dl className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                  {Object.entries(day?.minutes_by_kind ?? {}).map(([k, v]) => (
+                    <div key={k}>
+                      <dt className="text-[var(--muted)]">{k}</dt>
+                      <dd className="font-medium">{formatMinutes(v)}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <button
+                  className="btn mt-4 w-full"
+                  disabled={busy || !day}
+                  onClick={() => void syncBitrix()}
+                >
+                  Записать приход/уход в Битрикс
+                </button>
+              </div>
+              <div className="border border-[var(--line)] bg-[var(--panel)] p-4">
+                <h3 className="font-display text-lg">Отметки Битрикс</h3>
+                {!data.punches.filter((p) => p.employee_id === selectedId).length ? (
+                  <p className="mt-2 text-sm text-[var(--muted)]">
+                    Пока пусто — нажмите синхронизацию.
+                  </p>
+                ) : (
+                  <ul className="mt-2 space-y-2 text-sm">
+                    {data.punches
+                      .filter((p) => p.employee_id === selectedId)
+                      .map((p) => (
+                        <li key={p.id} className="border-b border-[var(--line)] pb-2">
+                          <span className="font-medium">{p.type}</span> · {formatTime(p.at)}
+                          <p className="text-xs text-[var(--muted)]">{p.note}</p>
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {tab === "visits" && (
+          <section>
+            <h2 className="section-title">Мои визиты · {selected?.name}</h2>
+            <p className="section-lead">
+              Без дела визит не идёт в KPI. Выберите дело или отметьте «не по работе».
+            </p>
+            <div className="mt-4 space-y-3">
+              {!myVisits.length && (
+                <p className="text-sm text-[var(--muted)]">Визитов за день нет.</p>
+              )}
+              {myVisits.map((v) => {
+                const place = data.places.find((p) => p.id === v.place_id);
+                return (
+                  <div
+                    key={v.id}
+                    className="border border-[var(--line)] bg-[var(--panel)] p-4"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <p className="font-medium text-[var(--ink)]">{place?.name}</p>
+                        <p className="text-sm text-[var(--muted)]">
+                          {formatTime(v.start)}–{formatTime(v.end)} · зачёт{" "}
+                          {formatMinutes(v.credited_minutes)}
+                        </p>
+                      </div>
+                      <span className="chip">{v.status}</span>
+                    </div>
+                    {v.status === "awaiting_choice" ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {data.cases.map((c) => (
+                          <button
+                            key={c.id}
+                            className="btn-ghost"
+                            disabled={busy}
+                            onClick={() => void linkVisit(v.id, c.id)}
+                          >
+                            {c.title}
+                          </button>
+                        ))}
+                        <button
+                          className="btn-danger"
+                          disabled={busy}
+                          onClick={() => void linkVisit(v.id, null, true)}
+                        >
+                          Не по работе
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="mt-2 text-sm text-[var(--muted)]">
+                        {v.case_title ?? "без дела"} · {v.link_method ?? "—"}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {tab === "places" && (
+          <section>
+            <h2 className="section-title">Справочник мест</h2>
+            <p className="section-lead">
+              Офис вручную, госорганы из 2ГИС, клиенты из CRM Битрикс. Неизвестное место = личное.
+            </p>
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full min-w-[720px] text-left text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--line)] text-[var(--muted)]">
+                    <th className="py-2 pr-3 font-medium">Место</th>
+                    <th className="py-2 pr-3 font-medium">Тип</th>
+                    <th className="py-2 pr-3 font-medium">Источник</th>
+                    <th className="py-2 pr-3 font-medium">Радиус</th>
+                    <th className="py-2 pr-3 font-medium">Статус</th>
+                    <th className="py-2 font-medium" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.places.map((p) => (
+                    <tr key={p.id} className="border-b border-[var(--line)]/70">
+                      <td className="py-3 pr-3">
+                        <p className="font-medium text-[var(--ink)]">{p.name}</p>
+                        <p className="text-xs text-[var(--muted)]">{p.address}</p>
+                      </td>
+                      <td className="py-3 pr-3">{p.type}</td>
+                      <td className="py-3 pr-3">{p.source}</td>
+                      <td className="py-3 pr-3">{p.radius_m} м</td>
+                      <td className="py-3 pr-3">{p.status}</td>
+                      <td className="py-3">
+                        {p.status === "pending" && (
+                          <button className="btn-ghost" onClick={() => void approvePlace(p.id)}>
+                            Подтвердить
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {tab === "settings" && (
+          <SettingsPanel
+            settings={data.settings}
+            employees={data.employees}
+            onSave={(patch) => void saveSettings(patch)}
+            onToggle={toggleCollection}
+            onReset={() => void resetDemo()}
+            busy={busy}
+          />
+        )}
+      </div>
+
+      {toast && <div className="toast">{toast}</div>}
+    </div>
+  );
+}
+
+function SettingsPanel({
+  settings,
+  employees,
+  onSave,
+  onToggle,
+  onReset,
+  busy,
+}: {
+  settings: GeoSettings;
+  employees: Employee[];
+  onSave: (patch: Partial<GeoSettings>) => void;
+  onToggle: (id: string, enabled: boolean) => void;
+  onReset: () => void;
+  busy: boolean;
+}) {
+  const [visitMin, setVisitMin] = useState(settings.visit_min);
+  const [personalMin, setPersonalMin] = useState(settings.personal_stop_min);
+  const [officeExit, setOfficeExit] = useState(settings.office_exit_min);
+
+  useEffect(() => {
+    setVisitMin(settings.visit_min);
+    setPersonalMin(settings.personal_stop_min);
+    setOfficeExit(settings.office_exit_min);
+  }, [settings]);
+
+  return (
+    <section className="grid gap-6 lg:grid-cols-2">
+      <div>
+        <h2 className="section-title">Пороги</h2>
+        <p className="section-lead">Все пороги из таблицы settings — без хардкода в алгоритме.</p>
+        <div className="mt-4 space-y-4 border border-[var(--line)] bg-[var(--panel)] p-4">
+          <label className="block text-sm">
+            Визит, мин
+            <input
+              className="input mt-1"
+              type="number"
+              value={visitMin}
+              onChange={(e) => setVisitMin(Number(e.target.value))}
+            />
+          </label>
+          <label className="block text-sm">
+            Личная остановка, мин
+            <input
+              className="input mt-1"
+              type="number"
+              value={personalMin}
+              onChange={(e) => setPersonalMin(Number(e.target.value))}
+            />
+          </label>
+          <label className="block text-sm">
+            Выход из офиса, мин
+            <input
+              className="input mt-1"
+              type="number"
+              value={officeExit}
+              onChange={(e) => setOfficeExit(Number(e.target.value))}
+            />
+          </label>
+          <button
+            className="btn"
+            disabled={busy}
+            onClick={() =>
+              onSave({
+                visit_min: visitMin,
+                personal_stop_min: personalMin,
+                office_exit_min: officeExit,
+              })
+            }
+          >
+            Сохранить и пересчитать
+          </button>
+        </div>
+      </div>
+      <div>
+        <h2 className="section-title">Сбор по сотрудникам</h2>
+        <p className="section-lead">Без согласия сбор не включается.</p>
+        <ul className="mt-4 space-y-2">
+          {employees.map((e) => (
+            <li
+              key={e.id}
+              className="flex items-center justify-between border border-[var(--line)] bg-[var(--panel)] px-3 py-3"
+            >
+              <div>
+                <p className="font-medium">{e.name}</p>
+                <p className="text-xs text-[var(--muted)]">
+                  согласие: {e.consent_at ? "есть" : "нет"}
+                </p>
+              </div>
+              <button
+                className={cn("btn-ghost", e.collection_enabled && "tab-active")}
+                onClick={() => onToggle(e.id, !e.collection_enabled)}
+              >
+                {e.collection_enabled ? "Выключить" : "Включить"}
+              </button>
+            </li>
+          ))}
+        </ul>
+        <button className="btn-danger mt-4" onClick={onReset} disabled={busy}>
+          Сбросить демо-данные
+        </button>
+      </div>
+    </section>
+  );
+}
