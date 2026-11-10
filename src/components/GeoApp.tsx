@@ -21,7 +21,13 @@ import type {
   Place,
   Visit,
 } from "@/lib/types";
-import { apiGet, apiMutate } from "@/lib/api-client";
+import {
+  apiGet,
+  apiMutate,
+  clearAppToken,
+  getAppToken,
+  setAppToken,
+} from "@/lib/api-client";
 import { cn, formatMinutes, formatTime } from "@/lib/utils";
 
 const MapPanel = dynamic(() => import("./MapPanel"), {
@@ -61,6 +67,8 @@ export default function GeoApp() {
   const [tab, setTab] = useState<Tab>("map");
   const [data, setData] = useState<StatePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [needsToken, setNeedsToken] = useState(false);
+  const [tokenInput, setTokenInput] = useState("");
   const [selectedId, setSelectedId] = useState<string>("e-askar");
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -70,12 +78,16 @@ export default function GeoApp() {
     try {
       const res = await apiGet("/api/state");
       if (res.status === 401) {
-        throw new Error("Нужен вход в Cursor (приложение private/team)");
+        setNeedsToken(true);
+        setData(null);
+        setError(null);
+        return;
       }
       if (!res.ok) throw new Error("Не удалось загрузить состояние");
       const json = (await res.json()) as StatePayload;
       startTransition(() => {
         setData(json);
+        setNeedsToken(false);
         setError(null);
       });
     } catch (e) {
@@ -85,9 +97,45 @@ export default function GeoApp() {
 
   useEffect(() => {
     void load();
-    const t = setInterval(() => void load(), 30_000);
+    const t = setInterval(() => {
+      if (getAppToken()) void load();
+    }, 30_000);
     return () => clearInterval(t);
   }, [load]);
+
+  async function submitToken(e: React.FormEvent) {
+    e.preventDefault();
+    const value = tokenInput.trim();
+    if (!value) return;
+    setBusy(true);
+    setAppToken(value);
+    try {
+      const res = await apiGet("/api/state");
+      if (res.status === 401) {
+        clearAppToken();
+        setError("Неверный пароль доступа");
+        setNeedsToken(true);
+        return;
+      }
+      if (!res.ok) throw new Error("Не удалось войти");
+      const json = (await res.json()) as StatePayload;
+      setData(json);
+      setNeedsToken(false);
+      setError(null);
+      setTokenInput("");
+    } catch (err) {
+      clearAppToken();
+      setError(err instanceof Error ? err.message : "Ошибка входа");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function logout() {
+    clearAppToken();
+    setData(null);
+    setNeedsToken(true);
+  }
 
   useEffect(() => {
     if (!toast) return;
@@ -175,6 +223,39 @@ export default function GeoApp() {
     }
   }
 
+  if (needsToken && !data) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-6">
+        <form
+          onSubmit={(e) => void submitToken(e)}
+          className="w-full max-w-md border border-[var(--line)] bg-[var(--panel)] p-6 shadow-[var(--shadow)]"
+        >
+          <ShieldAlert className="mb-3 h-8 w-8 text-[var(--accent)]" />
+          <p className="brand-mark">QALQAN · геолокация</p>
+          <h1 className="mt-2 font-display text-2xl text-[var(--ink)]">
+            Пароль доступа
+          </h1>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            Публичное приложение. Введите пароль из секрета APP_ACCESS_TOKEN
+            (локально для демо: local-dev).
+          </p>
+          <input
+            className="input mt-4"
+            type="password"
+            autoComplete="current-password"
+            placeholder="Пароль"
+            value={tokenInput}
+            onChange={(e) => setTokenInput(e.target.value)}
+          />
+          {error && <p className="mt-2 text-sm text-[var(--danger)]">{error}</p>}
+          <button className="btn mt-4 w-full" type="submit" disabled={busy}>
+            Войти
+          </button>
+        </form>
+      </div>
+    );
+  }
+
   if (error && !data) {
     return (
       <div className="flex min-h-screen items-center justify-center p-6">
@@ -224,6 +305,9 @@ export default function GeoApp() {
             </button>
             <button className="btn" onClick={() => void syncBitrix()} disabled={busy}>
               <Send className="h-4 w-4" /> В Битрикс
+            </button>
+            <button className="btn-ghost" type="button" onClick={logout}>
+              Выйти
             </button>
           </div>
         </div>

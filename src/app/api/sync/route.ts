@@ -32,7 +32,7 @@ export async function POST(req: Request) {
   return NextResponse.json(
     {
       ...result,
-      actor: auth.email || auth.sub,
+      actor: auth.email,
     },
     { status: result.ok ? 200 : 400 },
   );

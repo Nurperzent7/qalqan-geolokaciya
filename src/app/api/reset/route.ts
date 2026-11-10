@@ -10,6 +10,6 @@ export async function POST(req: Request) {
     ok: true,
     employees: s.employees.length,
     points: s.points.length,
-    actor: auth.email || auth.sub,
+    actor: auth.email,
   });
 }
