@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { guardManage, guardRead } from "@/lib/api-guard";
+import { scopePlaces } from "@/lib/scope";
 import { approvePlace, ensureStoreReady, getStore } from "@/lib/store";
 
 export async function GET(req: Request) {
   const auth = await guardRead(req);
   if (auth instanceof NextResponse) return auth;
   await ensureStoreReady();
-  return NextResponse.json(getStore().places);
+  return NextResponse.json(scopePlaces(getStore().places, auth));
 }
 
 export async function PATCH(req: Request) {

@@ -1,13 +1,26 @@
 import { NextResponse } from "next/server";
-import { guardManage, isPreview } from "@/lib/api-guard";
+import { guardEmployeeAction, isPreview } from "@/lib/api-guard";
 import { hasBitrixWebhook } from "@/lib/bitrix";
 import { rateLimit } from "@/lib/rate-limit";
 import { ensureStoreReady, getStore, syncDayToBitrix } from "@/lib/store";
 
 export async function POST(req: Request) {
-  const auth = await guardManage(req);
+  let body: { employee_id?: string };
+  try {
+    body = (await req.json()) as { employee_id?: string };
+  } catch {
+    return NextResponse.json({ error: "invalid json" }, { status: 400 });
+  }
+
+  if (!body.employee_id || typeof body.employee_id !== "string") {
+    return NextResponse.json({ error: "employee_id required" }, { status: 400 });
+  }
+  if (body.employee_id.length > 64) {
+    return NextResponse.json({ error: "employee_id too long" }, { status: 400 });
+  }
+
+  const auth = await guardEmployeeAction(req, body.employee_id);
   if (auth instanceof NextResponse) return auth;
-  await ensureStoreReady();
 
   const limited = rateLimit(`sync:${auth.email}`, 6, 60_000);
   if (!limited.ok) {
@@ -24,20 +37,7 @@ export async function POST(req: Request) {
     );
   }
 
-  let body: { employee_id?: string };
-  try {
-    body = (await req.json()) as { employee_id?: string };
-  } catch {
-    return NextResponse.json({ error: "invalid json" }, { status: 400 });
-  }
-
-  if (!body.employee_id || typeof body.employee_id !== "string") {
-    return NextResponse.json({ error: "employee_id required" }, { status: 400 });
-  }
-  if (body.employee_id.length > 64) {
-    return NextResponse.json({ error: "employee_id too long" }, { status: 400 });
-  }
-
+  await ensureStoreReady();
   const exists = getStore().employees.some((e) => e.id === body.employee_id);
   if (!exists) {
     return NextResponse.json({ error: "unknown employee" }, { status: 404 });
@@ -55,10 +55,7 @@ export async function POST(req: Request) {
 
   const result = await syncDayToBitrix(body.employee_id);
   return NextResponse.json(
-    {
-      ...result,
-      actor: auth.email,
-    },
+    { ...result, actor: auth.email },
     { status: result.ok ? 200 : 400 },
   );
 }

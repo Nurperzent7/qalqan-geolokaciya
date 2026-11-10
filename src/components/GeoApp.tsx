@@ -53,7 +53,7 @@ interface StatePayload {
   demo_date: string;
   bitrix_mode: "live" | "mock";
   persistence?: "postgres" | "memory";
-  settings: GeoSettings;
+  settings: Partial<GeoSettings> & Pick<GeoSettings, "work_window" | "lunch_window" | "draft_refresh_min">;
   employees: Employee[];
   places: Place[];
   visits: Visit[];
@@ -62,6 +62,13 @@ interface StatePayload {
   cases: CaseOption[];
   viewer_id: string;
   sample_notice: string;
+  viewer: {
+    email: string;
+    name: string;
+    role: "admin" | "employee";
+    employee_id: string | null;
+    can_manage: boolean;
+  };
 }
 
 const TABS: { id: Tab; label: string; icon: typeof MapPinned }[] = [
@@ -78,6 +85,8 @@ export default function GeoApp() {
   const [data, setData] = useState<StatePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [needsToken, setNeedsToken] = useState(false);
+  const [loginRole, setLoginRole] = useState<"admin" | "employee">("employee");
+  const [loginEmployeeId, setLoginEmployeeId] = useState("e-askar");
   const [tokenInput, setTokenInput] = useState("");
   const [selectedId, setSelectedId] = useState<string>("e-askar");
   const [busy, setBusy] = useState(false);
@@ -87,7 +96,7 @@ export default function GeoApp() {
   const load = useCallback(async () => {
     try {
       const res = await apiGet("/api/state");
-      if (res.status === 401) {
+      if (res.status === 401 || res.status === 403) {
         setNeedsToken(true);
         setData(null);
         setError(null);
@@ -97,6 +106,8 @@ export default function GeoApp() {
       const json = (await res.json()) as StatePayload;
       startTransition(() => {
         setData(json);
+        if (json.viewer.employee_id) setSelectedId(json.viewer.employee_id);
+        else if (json.employees[0]) setSelectedId(json.employees[0].id);
         setNeedsToken(false);
         setError(null);
       });
@@ -113,35 +124,42 @@ export default function GeoApp() {
     return () => clearInterval(t);
   }, [load]);
 
-  async function submitToken(e: React.FormEvent) {
+  async function submitLogin(e: React.FormEvent) {
     e.preventDefault();
-    const value = tokenInput.trim();
-    if (!value) return;
+    const password = tokenInput.trim();
+    if (!password) return;
     setBusy(true);
-    setAppToken(value);
+    setError(null);
     try {
-      const res = await apiGet("/api/state");
-      if (res.status === 401) {
-        clearAppToken();
-        setError("Неверный пароль доступа");
-        setNeedsToken(true);
+      const res = await apiMutate("/api/auth/login", {
+        method: "POST",
+        body: {
+          role: loginRole,
+          password,
+          employee_id: loginRole === "employee" ? loginEmployeeId : undefined,
+        },
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setError(json.detail || json.error || "Неверный логин");
         return;
       }
-      if (!res.ok) throw new Error("Не удалось войти");
-      const json = (await res.json()) as StatePayload;
-      setData(json);
-      setNeedsToken(false);
-      setError(null);
+      setAppToken(json.token as string);
       setTokenInput("");
+      await load();
     } catch (err) {
-      clearAppToken();
       setError(err instanceof Error ? err.message : "Ошибка входа");
     } finally {
       setBusy(false);
     }
   }
 
-  function logout() {
+  async function logout() {
+    try {
+      await apiMutate("/api/auth/logout", { method: "POST" });
+    } catch {
+      /* ignore */
+    }
     clearAppToken();
     setData(null);
     setNeedsToken(true);
@@ -237,23 +255,53 @@ export default function GeoApp() {
     return (
       <div className="flex min-h-screen items-center justify-center p-6">
         <form
-          onSubmit={(e) => void submitToken(e)}
+          onSubmit={(e) => void submitLogin(e)}
           className="w-full max-w-md border border-[var(--line)] bg-[var(--panel)] p-6 shadow-[var(--shadow)]"
         >
           <ShieldAlert className="mb-3 h-8 w-8 text-[var(--accent)]" />
           <p className="brand-mark">QALQAN · геолокация</p>
-          <h1 className="mt-2 font-display text-2xl text-[var(--ink)]">
-            Пароль доступа
-          </h1>
+          <h1 className="mt-2 font-display text-2xl text-[var(--ink)]">Вход</h1>
           <p className="mt-2 text-sm text-[var(--muted)]">
-            Публичное приложение. Введите пароль из секрета APP_ACCESS_TOKEN
-            (локально для демо: local-dev).
+            Админ — секрет APP_ADMIN_TOKEN (локально: admin-dev). Сотрудник —
+            персональный PIN (демо: Аскар 1111, Анна 2222, Нурлан 3333, Дана
+            4444).
           </p>
+          <div className="mt-4 flex gap-2">
+            <button
+              type="button"
+              className={cn("btn-ghost flex-1", loginRole === "employee" && "tab-active")}
+              onClick={() => setLoginRole("employee")}
+            >
+              Сотрудник
+            </button>
+            <button
+              type="button"
+              className={cn("btn-ghost flex-1", loginRole === "admin" && "tab-active")}
+              onClick={() => setLoginRole("admin")}
+            >
+              Админ
+            </button>
+          </div>
+          {loginRole === "employee" && (
+            <label className="mt-3 block text-sm">
+              Кто вы
+              <select
+                className="select mt-1"
+                value={loginEmployeeId}
+                onChange={(e) => setLoginEmployeeId(e.target.value)}
+              >
+                <option value="e-askar">Аскар Бекенов</option>
+                <option value="e-ann">Анна Серикова</option>
+                <option value="e-nurlan">Нурлан Касымов</option>
+                <option value="e-dana">Дана Омарова</option>
+              </select>
+            </label>
+          )}
           <input
-            className="input mt-4"
+            className="input mt-3"
             type="password"
             autoComplete="current-password"
-            placeholder="Пароль"
+            placeholder={loginRole === "admin" ? "Пароль админа" : "PIN"}
             value={tokenInput}
             onChange={(e) => setTokenInput(e.target.value)}
           />
@@ -289,6 +337,11 @@ export default function GeoApp() {
   }
 
   const selected = data.employees.find((e) => e.id === selectedId);
+  const isAdmin = data.viewer.can_manage;
+  const visibleTabs = TABS.filter((t) => {
+    if (t.id === "settings" || t.id === "places") return isAdmin;
+    return true;
+  });
 
   return (
     <div className="min-h-screen">
@@ -307,6 +360,9 @@ export default function GeoApp() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="chip">
+              {isAdmin ? "Роль: админ" : `Роль: ${data.viewer.name}`}
+            </span>
+            <span className="chip">
               {data.bitrix_mode === "mock" ? "Битрикс: демо" : "Битрикс: live"}
             </span>
             <span className="chip">
@@ -319,7 +375,7 @@ export default function GeoApp() {
             <button className="btn" onClick={() => void syncBitrix()} disabled={busy}>
               <Send className="h-4 w-4" /> В Битрикс
             </button>
-            <button className="btn-ghost" type="button" onClick={logout}>
+            <button className="btn-ghost" type="button" onClick={() => void logout()}>
               Выйти
             </button>
           </div>
@@ -333,7 +389,7 @@ export default function GeoApp() {
 
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <nav className="flex gap-1 overflow-x-auto pb-1">
-            {TABS.map((t) => {
+            {visibleTabs.map((t) => {
               const Icon = t.icon;
               return (
                 <button
@@ -347,20 +403,24 @@ export default function GeoApp() {
               );
             })}
           </nav>
-          <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
-            Сотрудник
-            <select
-              className="select"
-              value={selectedId}
-              onChange={(e) => setSelectedId(e.target.value)}
-            >
-              {data.employees.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          {isAdmin ? (
+            <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
+              Сотрудник
+              <select
+                className="select"
+                value={selectedId}
+                onChange={(e) => setSelectedId(e.target.value)}
+              >
+                {data.employees.map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <span className="text-sm text-[var(--muted)]">{selected?.name}</span>
+          )}
         </div>
 
         {tab === "map" && (
@@ -603,9 +663,9 @@ export default function GeoApp() {
           />
         )}
 
-        {tab === "settings" && (
+        {tab === "settings" && isAdmin && (
           <SettingsPanel
-            settings={data.settings}
+            settings={data.settings as GeoSettings}
             employees={data.employees}
             onSave={(patch) => void saveSettings(patch)}
             onToggle={toggleCollection}

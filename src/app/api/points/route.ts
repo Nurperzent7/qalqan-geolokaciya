@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import {
   MAX_POINTS_IN_STORE,
   MAX_POINTS_PER_BATCH,
-  guardManage,
+  requireCsrf,
+  requireViewer,
 } from "@/lib/api-guard";
 import { rateLimit } from "@/lib/rate-limit";
 import { ensureStoreReady, ingestPoints } from "@/lib/store";
@@ -11,11 +12,13 @@ import type { RawPoint } from "@/lib/types";
 const MAX_BODY_BYTES = 256_000;
 
 export async function POST(req: Request) {
-  const auth = await guardManage(req);
-  if (auth instanceof NextResponse) return auth;
-  await ensureStoreReady();
+  const csrf = requireCsrf(req);
+  if (csrf) return csrf;
 
-  const limited = rateLimit(`points:${auth.email}`, 30, 60_000);
+  const viewer = await requireViewer(req);
+  if (viewer instanceof NextResponse) return viewer;
+
+  const limited = rateLimit(`points:${viewer.email}`, 30, 60_000);
   if (!limited.ok) {
     return NextResponse.json(
       { error: "rate_limited", retry_after: limited.retryAfterSec },
@@ -26,7 +29,6 @@ export async function POST(req: Request) {
     );
   }
 
-  // Do not trust Content-Length alone — read with a hard byte cap
   const reader = req.body?.getReader();
   if (!reader) {
     return NextResponse.json({ error: "empty body" }, { status: 400 });
@@ -68,6 +70,27 @@ export async function POST(req: Request) {
     );
   }
 
+  const employeeIds = new Set(
+    body.points
+      .map((p) => (typeof p.employee_id === "string" ? p.employee_id : null))
+      .filter(Boolean) as string[],
+  );
+  if (employeeIds.size !== 1) {
+    return NextResponse.json(
+      { error: "batch must target exactly one employee" },
+      { status: 400 },
+    );
+  }
+  const employeeId = [...employeeIds][0];
+  if (!viewer.canManage && viewer.employeeId !== employeeId) {
+    return NextResponse.json(
+      { error: "forbidden", reason: "not_your_employee" },
+      { status: 403 },
+    );
+  }
+
+  await ensureStoreReady();
+
   const cleaned: RawPoint[] = [];
   for (const raw of body.points) {
     if (
@@ -79,11 +102,12 @@ export async function POST(req: Request) {
     ) {
       continue;
     }
+    if (raw.employee_id !== employeeId) continue;
     if (!Number.isFinite(raw.lat) || !Number.isFinite(raw.lon)) continue;
     if (Math.abs(raw.lat) > 90 || Math.abs(raw.lon) > 180) continue;
     cleaned.push({
       device_id: raw.device_id.slice(0, 64),
-      employee_id: raw.employee_id.slice(0, 64),
+      employee_id: employeeId,
       ts: raw.ts.slice(0, 40),
       lat: raw.lat,
       lon: raw.lon,
@@ -93,7 +117,7 @@ export async function POST(req: Request) {
       wifi_bssid:
         typeof raw.wifi_bssid === "string" ? raw.wifi_bssid.slice(0, 32) : null,
       mock: Boolean(raw.mock),
-      battery: Math.min(Math.max(Number(raw.battery) || 0, 1), 1),
+      battery: Math.min(Math.max(Number(raw.battery) || 0, 0), 1),
     });
   }
 

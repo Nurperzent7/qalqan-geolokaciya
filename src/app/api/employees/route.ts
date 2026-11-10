@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { guardManage, guardRead } from "@/lib/api-guard";
+import { scopeEmployees } from "@/lib/scope";
 import { ensureStoreReady, getStore, setCollection } from "@/lib/store";
 
 export async function GET(req: Request) {
   const auth = await guardRead(req);
   if (auth instanceof NextResponse) return auth;
   await ensureStoreReady();
-  return NextResponse.json(getStore().employees);
+  return NextResponse.json(scopeEmployees(getStore().employees, auth));
 }
 
 export async function PATCH(req: Request) {
