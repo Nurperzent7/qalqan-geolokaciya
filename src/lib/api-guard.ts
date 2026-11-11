@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 import { NextResponse } from "next/server";
 import { getIdentity, requireTeamRole } from "../../cursor/identity";
-import { getSession, type Session } from "./sessions";
+import { getSession, storeScopeFromToken, type Session } from "./sessions";
 
 const CSRF_VALUE = "CursorApp";
 const MAX_POINTS_PER_BATCH = 200;
@@ -169,11 +169,7 @@ export function isPreview(principal: AccessPrincipal): boolean {
 /** Isolate data per login session — hash so the bearer token never becomes a store key. */
 export function storeScopeFor(principal: AccessPrincipal): string {
   if (principal.sessionId) {
-    const h = createHash("sha256")
-      .update(principal.sessionId)
-      .digest("hex")
-      .slice(0, 32);
-    return `sess:${h}`;
+    return storeScopeFromToken(principal.sessionId);
   }
   const email = principal.email || "unknown";
   const h = createHash("sha256").update(email).digest("hex").slice(0, 32);
@@ -198,10 +194,12 @@ export function clientIp(req: Request): string {
   return "unknown";
 }
 
-/** Stable rate-limit bucket that is harder to reset by spoofing XFF alone. */
+/**
+ * Rate-limit bucket keyed only on trusted IP + action.
+ * Do not include User-Agent — clients can rotate it and bypass limits.
+ */
 export function rateLimitKey(req: Request, action: string): string {
   const ip = clientIp(req);
-  const ua = req.headers.get("user-agent")?.slice(0, 80) || "";
-  const dig = createHash("sha256").update(`${ip}|${ua}`).digest("hex").slice(0, 24);
+  const dig = createHash("sha256").update(ip).digest("hex").slice(0, 24);
   return `${action}:${dig}`;
 }

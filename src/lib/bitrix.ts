@@ -52,21 +52,22 @@ export async function punchWorkday(params: {
       }),
     });
     if (!res.ok) {
-      const text = await res.text();
+      // Do not forward upstream body — may leak portal internals.
+      await res.text().catch(() => "");
       return {
         ok: false,
         mode: "live",
         punch,
-        detail: `Bitrix HTTP ${res.status}: ${text.slice(0, 200)}`,
+        detail: `Bitrix HTTP ${res.status}`,
       };
     }
     return { ok: true, mode: "live", punch };
-  } catch (err) {
+  } catch {
     return {
       ok: false,
       mode: "live",
       punch,
-      detail: err instanceof Error ? err.message : "Bitrix request failed",
+      detail: "Bitrix request failed",
     };
   }
 }

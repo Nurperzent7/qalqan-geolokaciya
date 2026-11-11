@@ -1,5 +1,13 @@
 import { createHash, randomBytes, timingSafeEqual } from "crypto";
-import { loadSnapshot, saveSnapshot, hasDatabase } from "./db";
+import {
+  deleteExpiredSessionSnapshots,
+  deleteSnapshot,
+  deleteStaleStoreSnapshots,
+  hasDatabase,
+  loadSnapshot,
+  saveSnapshot,
+} from "./db";
+import { deleteStoreSnapshot } from "./store";
 
 export type SessionRole = "admin" | "employee";
 
@@ -11,50 +19,59 @@ export type Session = {
   name: string;
   createdAt: number;
   expiresAt: number;
+  /** Postgres sandbox key for this session's store (store:{storeScope}). */
+  storeScope: string;
 };
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
-const SNAPSHOT_ID = "sessions";
-
-type SessionStore = { sessions: Record<string, Session> };
+const STORE_STALE_MS = SESSION_TTL_MS + 60 * 60 * 1000;
 
 const g = globalThis as unknown as {
-  __geoSessions?: SessionStore;
-  __geoSessionsHydrate?: Promise<void>;
+  __geoSessionMem?: Map<string, Session>;
 };
 
-function emptyStore(): SessionStore {
-  return { sessions: {} };
+function mem(): Map<string, Session> {
+  if (!g.__geoSessionMem) g.__geoSessionMem = new Map();
+  return g.__geoSessionMem;
 }
 
-function getMem(): SessionStore {
-  if (!g.__geoSessions) g.__geoSessions = emptyStore();
-  return g.__geoSessions;
+function tokenHash(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
 }
 
-async function hydrate(): Promise<SessionStore> {
-  if (!hasDatabase()) return getMem();
-  if (!g.__geoSessionsHydrate) {
-    g.__geoSessionsHydrate = (async () => {
-      const snap = await loadSnapshot<SessionStore>(SNAPSHOT_ID);
-      g.__geoSessions = snap?.sessions ? snap : emptyStore();
-      pruneExpired(g.__geoSessions);
-    })();
+function sessionRowId(token: string): string {
+  return `session:${tokenHash(token)}`;
+}
+
+/** Same derivation as storeScopeFor(session principal). */
+export function storeScopeFromToken(token: string): string {
+  return `sess:${tokenHash(token).slice(0, 32)}`;
+}
+
+async function dropSessionArtifacts(session: Session, token: string) {
+  mem().delete(token);
+  if (hasDatabase()) {
+    await deleteSnapshot(sessionRowId(token));
   }
-  await g.__geoSessionsHydrate;
-  return getMem();
+  await deleteStoreSnapshot(session.storeScope);
 }
 
-function pruneExpired(store: SessionStore) {
-  const now = Date.now();
-  for (const [id, s] of Object.entries(store.sessions)) {
-    if (s.expiresAt <= now) delete store.sessions[id];
+async function gcExpired(): Promise<void> {
+  if (!hasDatabase()) {
+    const now = Date.now();
+    for (const [token, s] of mem()) {
+      if (s.expiresAt <= now) {
+        mem().delete(token);
+        await deleteStoreSnapshot(s.storeScope);
+      }
+    }
+    return;
   }
-}
-
-async function persist(store: SessionStore) {
-  if (!hasDatabase()) return;
-  await saveSnapshot(SNAPSHOT_ID, store);
+  const expired = await deleteExpiredSessionSnapshots(Date.now());
+  for (const row of expired) {
+    if (row.storeScope) await deleteStoreSnapshot(row.storeScope);
+  }
+  await deleteStaleStoreSnapshots(STORE_STALE_MS);
 }
 
 export async function createSession(input: {
@@ -62,8 +79,10 @@ export async function createSession(input: {
   employeeId: string | null;
   name: string;
 }): Promise<{ token: string; session: Session }> {
-  const store = await hydrate();
-  pruneExpired(store);
+  await gcExpired().catch(() => {
+    /* best-effort cleanup */
+  });
+
   const token = randomBytes(32).toString("hex");
   const session: Session = {
     id: token,
@@ -72,37 +91,52 @@ export async function createSession(input: {
     name: input.name,
     createdAt: Date.now(),
     expiresAt: Date.now() + SESSION_TTL_MS,
+    storeScope: storeScopeFromToken(token),
   };
-  store.sessions[token] = session;
-  try {
-    await persist(store);
-  } catch {
-    // Memory session still valid for this isolate if DB write fails
+
+  mem().set(token, session);
+  if (hasDatabase()) {
+    await saveSnapshot(sessionRowId(token), session);
   }
   return { token, session };
 }
 
 export async function getSession(token: string | null): Promise<Session | null> {
   if (!token) return null;
-  const store = await hydrate();
-  pruneExpired(store);
-  const session = store.sessions[token];
+
+  let session = mem().get(token) ?? null;
+  if (!session && hasDatabase()) {
+    session = await loadSnapshot<Session>(sessionRowId(token));
+    if (session) mem().set(token, session);
+  }
   if (!session) return null;
+
   if (session.expiresAt <= Date.now()) {
-    delete store.sessions[token];
-    await persist(store);
+    await dropSessionArtifacts(session, token);
     return null;
+  }
+  // Backfill storeScope for any legacy rows
+  if (!session.storeScope) {
+    session.storeScope = storeScopeFromToken(token);
   }
   return session;
 }
 
 export async function revokeSession(token: string | null): Promise<void> {
   if (!token) return;
-  const store = await hydrate();
-  if (store.sessions[token]) {
-    delete store.sessions[token];
-    await persist(store);
+  const session =
+    mem().get(token) ??
+    (hasDatabase() ? await loadSnapshot<Session>(sessionRowId(token)) : null);
+  if (!session) {
+    // Still try store cleanup from token derivation
+    await deleteStoreSnapshot(storeScopeFromToken(token));
+    if (hasDatabase()) await deleteSnapshot(sessionRowId(token));
+    return;
   }
+  await dropSessionArtifacts(
+    { ...session, storeScope: session.storeScope || storeScopeFromToken(token) },
+    token,
+  );
 }
 
 export function adminSecretsMatch(presented: string): {

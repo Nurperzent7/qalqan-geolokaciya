@@ -55,3 +55,44 @@ export async function saveSnapshot(id: string, payload: unknown): Promise<void> 
     [id, JSON.stringify(payload)],
   );
 }
+
+export async function deleteSnapshot(id: string): Promise<void> {
+  const p = getPool();
+  if (!p) return;
+  await ensureSchema();
+  await p.query("DELETE FROM app_snapshot WHERE id = $1", [id]);
+}
+
+/** Remove expired per-session rows; returns their payloads for store cleanup. */
+export async function deleteExpiredSessionSnapshots(
+  nowMs: number,
+): Promise<Array<{ storeScope?: string }>> {
+  const p = getPool();
+  if (!p) return [];
+  await ensureSchema();
+  const res = await p.query<{ payload: { storeScope?: string } }>(
+    `DELETE FROM app_snapshot
+     WHERE id LIKE 'session:%'
+       AND COALESCE((payload->>'expiresAt')::bigint, 0) <= $1
+     RETURNING payload`,
+    [nowMs],
+  );
+  return res.rows.map((r) => r.payload);
+}
+
+/** Drop orphaned session sandboxes older than the session TTL window. */
+export async function deleteStaleStoreSnapshots(
+  olderThanMs: number,
+): Promise<number> {
+  const p = getPool();
+  if (!p) return 0;
+  await ensureSchema();
+  const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+  const res = await p.query(
+    `DELETE FROM app_snapshot
+     WHERE id LIKE 'store:sess:%'
+       AND updated_at < $1::timestamptz`,
+    [cutoff],
+  );
+  return res.rowCount ?? 0;
+}

@@ -1,5 +1,5 @@
 import { punchWorkday } from "./bitrix";
-import { hasDatabase, loadSnapshot, saveSnapshot } from "./db";
+import { deleteSnapshot, hasDatabase, loadSnapshot, saveSnapshot } from "./db";
 import {
   buildDaySummary,
   detectStays,
@@ -171,6 +171,21 @@ export function resetStore(scopeId: string) {
   stores().set(scopeId, fresh);
   schedulePersist(scopeId);
   return fresh;
+}
+
+/** Drop in-memory + Postgres sandbox for a session scope. */
+export async function deleteStoreSnapshot(scopeId: string): Promise<void> {
+  if (!scopeId) return;
+  const timer = persists().get(scopeId);
+  if (timer) {
+    clearTimeout(timer);
+    persists().delete(scopeId);
+  }
+  stores().delete(scopeId);
+  hydrates().delete(scopeId);
+  if (hasDatabase()) {
+    await deleteSnapshot(snapshotKey(scopeId));
+  }
 }
 
 function recomputeEmployee(state: StoreState, employeeId: string) {
