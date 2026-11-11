@@ -20,9 +20,8 @@ https://qalqan-geolokaciya.apps.grok.bot
 
 ### Готовый debug APK
 
-После сборки файл лежит рядом с проектом:
-
-`Desktop\qalqan geo\qalqan-geolokaciya-debug.apk`
+В репозитории: [`mobile/releases/qalqan-geolokaciya-debug.apk`](./releases/qalqan-geolokaciya-debug.apk)  
+Скачать с GitHub: https://github.com/Nurperzent7/qalqan-geolokaciya/raw/main/mobile/releases/qalqan-geolokaciya-debug.apk
 
 Пересобрать:
 
