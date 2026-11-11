@@ -19,7 +19,7 @@ export async function POST(req: Request) {
   const viewer = await requireViewer(req);
   if (viewer instanceof NextResponse) return viewer;
 
-  const limited = rateLimit(`points:${viewer.email}`, 30, 60_000);
+  const limited = await rateLimit(`points:${viewer.email}`, 30, 60_000);
   if (!limited.ok) {
     return NextResponse.json(
       { error: "rate_limited", retry_after: limited.retryAfterSec },

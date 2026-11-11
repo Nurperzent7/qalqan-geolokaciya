@@ -36,7 +36,7 @@ import {
   getAppToken,
   setAppToken,
 } from "@/lib/api-client";
-import { EMPLOYEES as DEMO_EMPLOYEES } from "@/lib/seed";
+import type { LoginEmployee } from "@/lib/login-directory";
 import { cn, formatMinutes, formatTime } from "@/lib/utils";
 
 const MapPanel = dynamic(() => import("./MapPanel"), {
@@ -89,12 +89,33 @@ export default function GeoApp() {
   const [error, setError] = useState<string | null>(null);
   const [needsToken, setNeedsToken] = useState(false);
   const [loginRole, setLoginRole] = useState<"admin" | "employee">("admin");
-  const [loginEmployeeId, setLoginEmployeeId] = useState("e-askar");
+  const [loginEmployeeId, setLoginEmployeeId] = useState("");
+  const [loginDirectory, setLoginDirectory] = useState<LoginEmployee[]>([]);
+  const [employeeLoginEnabled, setEmployeeLoginEnabled] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
-  const [selectedId, setSelectedId] = useState<string>("e-askar");
+  const [selectedId, setSelectedId] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [, startTransition] = useTransition();
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/auth/directory", { cache: "no-store" });
+        if (!res.ok) return;
+        const json = (await res.json()) as {
+          employee_login?: boolean;
+          employees?: LoginEmployee[];
+        };
+        const list = Array.isArray(json.employees) ? json.employees : [];
+        setEmployeeLoginEnabled(Boolean(json.employee_login));
+        setLoginDirectory(list);
+        if (list[0]) setLoginEmployeeId(list[0].id);
+      } catch {
+        /* ignore */
+      }
+    })();
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -318,15 +339,20 @@ export default function GeoApp() {
             >
               Админ
             </button>
-            <button
-              type="button"
-              className={cn("btn-ghost flex-1", loginRole === "employee" && "tab-active")}
-              onClick={() => setLoginRole("employee")}
-            >
-              Сотрудник
-            </button>
+            {employeeLoginEnabled && (
+              <button
+                type="button"
+                className={cn(
+                  "btn-ghost flex-1",
+                  loginRole === "employee" && "tab-active",
+                )}
+                onClick={() => setLoginRole("employee")}
+              >
+                Сотрудник
+              </button>
+            )}
           </div>
-          {loginRole === "employee" && (
+          {loginRole === "employee" && employeeLoginEnabled && (
             <label className="mt-3 block text-sm">
               Кто вы
               <select
@@ -334,7 +360,7 @@ export default function GeoApp() {
                 value={loginEmployeeId}
                 onChange={(e) => setLoginEmployeeId(e.target.value)}
               >
-                {DEMO_EMPLOYEES.map((e) => (
+                {loginDirectory.map((e) => (
                   <option key={e.id} value={e.id}>
                     {e.name}
                   </option>

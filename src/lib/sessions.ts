@@ -11,15 +11,14 @@ import { deleteStoreSnapshot } from "./store";
 
 export type SessionRole = "admin" | "employee";
 
+/** Persisted session — never contains the bearer token. */
 export type Session = {
   id: string;
   role: SessionRole;
-  /** Set for employee sessions — data scope. */
   employeeId: string | null;
   name: string;
   createdAt: number;
   expiresAt: number;
-  /** Postgres sandbox key for this session's store (store:{storeScope}). */
   storeScope: string;
 };
 
@@ -27,6 +26,7 @@ const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const STORE_STALE_MS = SESSION_TTL_MS + 60 * 60 * 1000;
 
 const g = globalThis as unknown as {
+  /** Keyed by token hash — raw bearer never stored as map key in DB. */
   __geoSessionMem?: Map<string, Session>;
 };
 
@@ -39,21 +39,24 @@ function tokenHash(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-function sessionRowId(token: string): string {
-  return `session:${tokenHash(token)}`;
+function sessionRowIdFromHash(hash: string): string {
+  return `session:${hash}`;
 }
 
-/** Same derivation as storeScopeFor(session principal). */
+function sessionRowId(token: string): string {
+  return sessionRowIdFromHash(tokenHash(token));
+}
+
+/** Legacy per-session sandbox key (GC only). */
 export function storeScopeFromToken(token: string): string {
   return `sess:${tokenHash(token).slice(0, 32)}`;
 }
 
-async function dropSessionArtifacts(session: Session, token: string) {
-  mem().delete(token);
+async function dropSessionArtifacts(session: Session, tokenHashHex: string) {
+  mem().delete(tokenHashHex);
   if (hasDatabase()) {
-    await deleteSnapshot(sessionRowId(token));
+    await deleteSnapshot(sessionRowIdFromHash(tokenHashHex));
   }
-  // Only prune legacy per-session sandboxes — never the shared live company store.
   if (session.storeScope?.startsWith("sess:")) {
     await deleteStoreSnapshot(session.storeScope);
   }
@@ -62,17 +65,21 @@ async function dropSessionArtifacts(session: Session, token: string) {
 async function gcExpired(): Promise<void> {
   if (!hasDatabase()) {
     const now = Date.now();
-    for (const [token, s] of mem()) {
+    for (const [hash, s] of mem()) {
       if (s.expiresAt <= now) {
-        mem().delete(token);
-        await deleteStoreSnapshot(s.storeScope);
+        mem().delete(hash);
+        if (s.storeScope?.startsWith("sess:")) {
+          await deleteStoreSnapshot(s.storeScope);
+        }
       }
     }
     return;
   }
   const expired = await deleteExpiredSessionSnapshots(Date.now());
   for (const row of expired) {
-    if (row.storeScope) await deleteStoreSnapshot(row.storeScope);
+    if (row.storeScope?.startsWith("sess:")) {
+      await deleteStoreSnapshot(row.storeScope);
+    }
   }
   await deleteStaleStoreSnapshots(STORE_STALE_MS);
 }
@@ -87,8 +94,10 @@ export async function createSession(input: {
   });
 
   const token = randomBytes(32).toString("hex");
+  const hash = tokenHash(token);
+  // Opaque id — not the bearer token — so Postgres payloads stay safe if leaked.
   const session: Session = {
-    id: token,
+    id: randomBytes(16).toString("hex"),
     role: input.role,
     employeeId: input.employeeId,
     name: input.name,
@@ -97,44 +106,47 @@ export async function createSession(input: {
     storeScope: "live:company",
   };
 
-  mem().set(token, session);
+  mem().set(hash, session);
   if (hasDatabase()) {
-    await saveSnapshot(sessionRowId(token), session);
+    await saveSnapshot(sessionRowIdFromHash(hash), session);
   }
   return { token, session };
 }
 
 export async function getSession(token: string | null): Promise<Session | null> {
   if (!token) return null;
+  const hash = tokenHash(token);
 
-  let session = mem().get(token) ?? null;
+  let session = mem().get(hash) ?? null;
   if (!session && hasDatabase()) {
-    session = await loadSnapshot<Session>(sessionRowId(token));
-    if (session) mem().set(token, session);
+    session = await loadSnapshot<Session>(sessionRowIdFromHash(hash));
+    if (session) mem().set(hash, session);
   }
   if (!session) return null;
 
   if (session.expiresAt <= Date.now()) {
-    await dropSessionArtifacts(session, token);
+    await dropSessionArtifacts(session, hash);
     return null;
   }
-  // Backfill storeScope for any legacy rows
   if (!session.storeScope) {
-    session.storeScope = storeScopeFromToken(token);
+    session.storeScope = "live:company";
   }
   return session;
 }
 
 export async function revokeSession(token: string | null): Promise<void> {
   if (!token) return;
+  const hash = tokenHash(token);
   const session =
-    mem().get(token) ??
-    (hasDatabase() ? await loadSnapshot<Session>(sessionRowId(token)) : null);
+    mem().get(hash) ??
+    (hasDatabase()
+      ? await loadSnapshot<Session>(sessionRowIdFromHash(hash))
+      : null);
   if (!session) {
-    if (hasDatabase()) await deleteSnapshot(sessionRowId(token));
+    if (hasDatabase()) await deleteSnapshot(sessionRowIdFromHash(hash));
     return;
   }
-  await dropSessionArtifacts(session, token);
+  await dropSessionArtifacts(session, hash);
 }
 
 export function adminSecretsMatch(presented: string): {
@@ -142,7 +154,6 @@ export function adminSecretsMatch(presented: string): {
   simulated: boolean;
   missing?: boolean;
 } {
-  // Dynamic key so Next never inlines an empty value at build time
   const raw = process.env["APP_ADMIN_TOKEN"];
   const expected = raw?.trim().replace(/^["']|["']$/g, "") ?? "";
   const got = presented.trim().replace(/^["']|["']$/g, "");

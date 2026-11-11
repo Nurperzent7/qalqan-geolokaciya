@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { requireCsrf, rateLimitKey } from "@/lib/api-guard";
+import { loginEmployeeName } from "@/lib/login-directory";
 import {
   employeeLoginAvailable,
   verifyEmployeeCredential,
 } from "@/lib/pins";
 import { rateLimit } from "@/lib/rate-limit";
-import { EMPLOYEES } from "@/lib/seed";
 import { adminSecretsMatch, createSession } from "@/lib/sessions";
 
 export const runtime = "nodejs";
@@ -15,7 +15,7 @@ export async function POST(req: Request) {
   const csrf = requireCsrf(req);
   if (csrf) return csrf;
 
-  const limited = rateLimit(rateLimitKey(req, "login"), 10, 15 * 60_000);
+  const limited = await rateLimit(rateLimitKey(req, "login"), 10, 15 * 60_000);
   if (!limited.ok) {
     return NextResponse.json(
       {
@@ -86,19 +86,19 @@ export async function POST(req: Request) {
     }
     const employeeId =
       typeof body.employee_id === "string" ? body.employee_id.slice(0, 64) : "";
-    const emp = EMPLOYEES.find((e) => e.id === employeeId);
-    if (!emp || !verifyEmployeeCredential(employeeId, password)) {
+    const name = loginEmployeeName(employeeId);
+    if (!name || !verifyEmployeeCredential(employeeId, password)) {
       return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
     }
     const { token, session } = await createSession({
       role: "employee",
-      employeeId: emp.id,
-      name: emp.name,
+      employeeId,
+      name,
     });
     return NextResponse.json({
       token,
       role: session.role,
-      employee_id: emp.id,
+      employee_id: employeeId,
       name: session.name,
     });
   }

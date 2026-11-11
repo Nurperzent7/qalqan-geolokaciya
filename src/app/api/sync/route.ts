@@ -22,7 +22,7 @@ export async function POST(req: Request) {
   const auth = await guardEmployeeAction(req, body.employee_id);
   if (auth instanceof NextResponse) return auth;
 
-  const limited = rateLimit(`sync:${auth.email}`, 6, 60_000);
+  const limited = await rateLimit(`sync:${auth.email}`, 6, 60_000);
   if (!limited.ok) {
     return NextResponse.json(
       {
