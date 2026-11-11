@@ -1,4 +1,4 @@
-/** Browser fetch: Bearer app token + CSRF header on mutations. */
+/** Browser / Capacitor fetch: Bearer app token + CSRF header on mutations. */
 
 const TOKEN_KEY = "qalqan_app_token";
 
@@ -6,17 +6,26 @@ const CSRF_HEADERS = {
   "X-Requested-With": "CursorApp",
 } as const;
 
+function storage(): Storage | null {
+  if (typeof window === "undefined") return null;
+  // localStorage so Capacitor keeps the session when the app is backgrounded.
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
 export function getAppToken(): string {
-  if (typeof window === "undefined") return "";
-  return sessionStorage.getItem(TOKEN_KEY) || "";
+  return storage()?.getItem(TOKEN_KEY) || "";
 }
 
 export function setAppToken(token: string) {
-  sessionStorage.setItem(TOKEN_KEY, token);
+  storage()?.setItem(TOKEN_KEY, token);
 }
 
 export function clearAppToken() {
-  sessionStorage.removeItem(TOKEN_KEY);
+  storage()?.removeItem(TOKEN_KEY);
 }
 
 function authHeaders(): HeadersInit {

@@ -787,9 +787,11 @@ function PhonePanel({
   setToast: (msg: string) => void;
 }) {
   const [liveRunning, setLiveRunning] = useState(false);
+  const [nativeApp, setNativeApp] = useState(false);
   const [log, setLog] = useState<string[]>([]);
   const [lastFix, setLastFix] = useState<string | null>(null);
   const watchRef = useRef<number | null>(null);
+  const nativeWatcherRef = useRef<string | null>(null);
   const deviceId = useMemo(() => {
     if (typeof window === "undefined") return `web-${employeeId}`;
     const key = `qalqan-device-${employeeId}`;
@@ -802,9 +804,21 @@ function PhonePanel({
   }, [employeeId]);
 
   useEffect(() => {
+    void import("@/lib/native-geo").then((m) =>
+      m.isNativeApp().then(setNativeApp),
+    );
+  }, []);
+
+  useEffect(() => {
     return () => {
       if (watchRef.current != null && navigator.geolocation) {
         navigator.geolocation.clearWatch(watchRef.current);
+      }
+      const wid = nativeWatcherRef.current;
+      if (wid) {
+        void import("@/lib/native-geo").then((m) =>
+          m.stopNativeBackgroundGeo(wid),
+        );
       }
     };
   }, []);
@@ -821,7 +835,7 @@ function PhonePanel({
     const json = await res.json();
     if (!res.ok) {
       setToast(json.error || "Ошибка отправки точки");
-      stopLive();
+      void stopLive();
       return false;
     }
     const t = new Date().toLocaleTimeString("ru-RU", {
@@ -830,6 +844,32 @@ function PhonePanel({
     pushLog(`${t} · GPS · +${json.added}`);
     onSent();
     return true;
+  }
+
+  async function publishFix(input: {
+    latitude: number;
+    longitude: number;
+    accuracy: number;
+    speed: number | null;
+    timestamp: number;
+  }) {
+    setLastFix(
+      `${input.latitude.toFixed(5)}, ${input.longitude.toFixed(5)} ±${Math.round(input.accuracy)}м`,
+    );
+    const moving = typeof input.speed === "number" && input.speed > 0.5;
+    await sendPoint({
+      device_id: deviceId,
+      employee_id: employeeId,
+      ts: new Date(input.timestamp).toISOString(),
+      lat: input.latitude,
+      lon: input.longitude,
+      accuracy_m: Math.min(input.accuracy || 50, 5000),
+      speed_mps: Math.max(input.speed ?? 0, 0),
+      is_moving: moving,
+      wifi_bssid: null,
+      mock: false,
+      battery: 1,
+    });
   }
 
   async function onGeoPosition(pos: GeolocationPosition) {
@@ -841,51 +881,82 @@ function PhonePanel({
       setToast("Симулированный GPS отклонён");
       return;
     }
-    setLastFix(
-      `${latitude.toFixed(5)}, ${longitude.toFixed(5)} ±${Math.round(accuracy)}м`,
-    );
-    const moving = typeof speed === "number" && speed > 0.5;
-    await sendPoint({
-      device_id: deviceId,
-      employee_id: employeeId,
-      ts: new Date(pos.timestamp).toISOString(),
-      lat: latitude,
-      lon: longitude,
-      accuracy_m: Math.min(accuracy || 50, 5000),
-      speed_mps: Math.max(speed ?? 0, 0),
-      is_moving: moving,
-      wifi_bssid: null,
-      mock: false,
-      battery: 1,
+    await publishFix({
+      latitude,
+      longitude,
+      accuracy: accuracy || 50,
+      speed: typeof speed === "number" ? speed : null,
+      timestamp: pos.timestamp,
     });
   }
 
-  function stopLive() {
+  async function stopLive() {
     if (watchRef.current != null && navigator.geolocation) {
       navigator.geolocation.clearWatch(watchRef.current);
       watchRef.current = null;
     }
+    if (nativeWatcherRef.current) {
+      const { stopNativeBackgroundGeo } = await import("@/lib/native-geo");
+      await stopNativeBackgroundGeo(nativeWatcherRef.current);
+      nativeWatcherRef.current = null;
+    }
     setLiveRunning(false);
   }
 
-  function startLive() {
+  async function startLive() {
     if (!collectionEnabled) {
       setToast("Сбор выключен для этого сотрудника — включите в Настройках");
       return;
     }
+    await stopLive();
+    setLiveRunning(true);
+
+    const { isNativeApp, startNativeBackgroundGeo } = await import(
+      "@/lib/native-geo"
+    );
+    if (await isNativeApp()) {
+      try {
+        const id = await startNativeBackgroundGeo(
+          (loc) => {
+            void publishFix({
+              latitude: loc.latitude,
+              longitude: loc.longitude,
+              accuracy: loc.accuracy || 50,
+              speed: loc.speed,
+              timestamp: loc.time || Date.now(),
+            });
+          },
+          (msg) => {
+            setToast(msg);
+            void stopLive();
+          },
+        );
+        nativeWatcherRef.current = id;
+        setToast("Фоновый GPS включён — можно свернуть приложение");
+        return;
+      } catch (e) {
+        setToast(
+          e instanceof Error
+            ? e.message
+            : "Не удалось запустить фоновый GPS",
+        );
+        setLiveRunning(false);
+        return;
+      }
+    }
+
     if (!navigator.geolocation) {
       setToast("Браузер не отдаёт геолокацию");
+      setLiveRunning(false);
       return;
     }
-    stopLive();
-    setLiveRunning(true);
     watchRef.current = navigator.geolocation.watchPosition(
       (pos) => {
         void onGeoPosition(pos);
       },
       (err) => {
         setToast(err.message || "Нет доступа к GPS");
-        stopLive();
+        void stopLive();
       },
       { enableHighAccuracy: true, maximumAge: 5_000, timeout: 20_000 },
     );
@@ -896,13 +967,16 @@ function PhonePanel({
       <div>
         <h2 className="section-title">Живой GPS</h2>
         <p className="section-lead">
-          Реальная геолокация браузера для {employeeName}. Точки уходят в общую
-          базу компании. Симуляция отключена.
+          {nativeApp
+            ? `Мобильное приложение: фоновый GPS для ${employeeName} (можно свернуть).`
+            : `Браузер: GPS только при открытой вкладке. Для фона установите приложение QALQAN (см. mobile/README).`}
         </p>
         <div className="mt-4 space-y-3 border border-[var(--line)] bg-[var(--panel)] p-4">
           <p className="text-sm text-[var(--muted)]">
             {collectionEnabled
-              ? "Сбор включён"
+              ? nativeApp
+                ? "Сбор включён · режим: фон (Capacitor)"
+                : "Сбор включён · режим: браузер"
               : "Сбор выключен — админ включает в Настройках"}
           </p>
           {lastFix && (
@@ -913,11 +987,19 @@ function PhonePanel({
           )}
           <div className="flex flex-wrap gap-2">
             {!liveRunning ? (
-              <button className="btn" type="button" onClick={startLive}>
-                Включить GPS
+              <button
+                className="btn"
+                type="button"
+                onClick={() => void startLive()}
+              >
+                {nativeApp ? "Включить GPS (фон)" : "Включить GPS"}
               </button>
             ) : (
-              <button className="btn-danger" type="button" onClick={stopLive}>
+              <button
+                className="btn-danger"
+                type="button"
+                onClick={() => void stopLive()}
+              >
                 Остановить GPS
               </button>
             )}

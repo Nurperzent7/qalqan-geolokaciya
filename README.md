@@ -29,6 +29,18 @@ npm run dev
 
 Dev-сервер: `http://127.0.0.1:3847`
 
+## Мобильное приложение (фон GPS)
+
+Сотрудникам — Capacitor APK/IPA: трек идёт при свёрнутом приложении.
+
+```bash
+cd mobile && npm install && npx cap add android && npx cap sync android && npx cap open android
+```
+
+Подробности: [`mobile/README.md`](./mobile/README.md).
+
+Админам достаточно браузера. В браузере GPS только при открытой вкладке.
+
 ## Стек
 
-Next.js · TypeScript · Tailwind · Leaflet · Postgres · Bitrix24 REST
+Next.js · TypeScript · Tailwind · Leaflet · Postgres · Bitrix24 REST · Capacitor
