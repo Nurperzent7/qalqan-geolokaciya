@@ -172,8 +172,11 @@ export async function syncEmployeesFromBitrix(scopeId: string): Promise<{
     };
   }
   state.employees = mergeRoster(state.employees, fetched.employees);
-  if (!state.viewerId && state.employees[0]) {
-    state.viewerId = state.employees[0].id;
+  // Drop anyone no longer in the Bitrix-approved roster (and excluded IDs).
+  const allowed = new Set(fetched.employees.map((e) => e.id));
+  state.employees = state.employees.filter((e) => allowed.has(e.id));
+  if (!state.viewerId || !allowed.has(state.viewerId)) {
+    state.viewerId = state.employees[0]?.id ?? "";
   }
   schedulePersist(scopeId);
   return { ok: true, count: state.employees.length };

@@ -84,11 +84,33 @@ type BitrixUser = {
   UF_DEPARTMENT?: number[];
 };
 
+/**
+ * Portal / integrator / excluded people — not tracked in geo module.
+ * (User 1, Автобит, Аскар Каймаков, Akmaral Yerzhanova — per ops request.)
+ */
+const EXCLUDED_BITRIX_IDS = new Set([1, 39, 43, 63]);
+
+function isExcludedBitrixUser(u: BitrixUser, idNum: number): boolean {
+  if (EXCLUDED_BITRIX_IDS.has(idNum)) return true;
+  const email = (u.EMAIL || "").toLowerCase();
+  if (
+    email.includes("avtobit") ||
+    email.startsWith("integrator@") ||
+    email === "pr.avtobit24@mail.ru"
+  ) {
+    return true;
+  }
+  const label = [u.NAME, u.LAST_NAME].filter(Boolean).join(" ").toLowerCase();
+  if (label.includes("автобит")) return true;
+  return false;
+}
+
 function mapBitrixUser(u: BitrixUser): Employee | null {
   const idNum = Number(u.ID);
   if (!Number.isFinite(idNum) || idNum <= 0) return null;
   const active = u.ACTIVE === true || u.ACTIVE === "Y" || u.ACTIVE === undefined;
   if (!active) return null;
+  if (isExcludedBitrixUser(u, idNum)) return null;
   const full = [u.NAME, u.LAST_NAME, u.SECOND_NAME]
     .filter((p) => typeof p === "string" && p.trim())
     .join(" ")
