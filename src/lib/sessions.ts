@@ -53,7 +53,10 @@ async function dropSessionArtifacts(session: Session, token: string) {
   if (hasDatabase()) {
     await deleteSnapshot(sessionRowId(token));
   }
-  await deleteStoreSnapshot(session.storeScope);
+  // Only prune legacy per-session sandboxes — never the shared live company store.
+  if (session.storeScope?.startsWith("sess:")) {
+    await deleteStoreSnapshot(session.storeScope);
+  }
 }
 
 async function gcExpired(): Promise<void> {
@@ -91,7 +94,7 @@ export async function createSession(input: {
     name: input.name,
     createdAt: Date.now(),
     expiresAt: Date.now() + SESSION_TTL_MS,
-    storeScope: storeScopeFromToken(token),
+    storeScope: "live:company",
   };
 
   mem().set(token, session);
@@ -128,15 +131,10 @@ export async function revokeSession(token: string | null): Promise<void> {
     mem().get(token) ??
     (hasDatabase() ? await loadSnapshot<Session>(sessionRowId(token)) : null);
   if (!session) {
-    // Still try store cleanup from token derivation
-    await deleteStoreSnapshot(storeScopeFromToken(token));
     if (hasDatabase()) await deleteSnapshot(sessionRowId(token));
     return;
   }
-  await dropSessionArtifacts(
-    { ...session, storeScope: session.storeScope || storeScopeFromToken(token) },
-    token,
-  );
+  await dropSessionArtifacts(session, token);
 }
 
 export function adminSecretsMatch(presented: string): {

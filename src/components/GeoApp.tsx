@@ -52,8 +52,10 @@ type Tab = "map" | "journal" | "visits" | "places" | "phone" | "settings";
 
 interface StatePayload {
   demo_date: string;
+  work_date?: string;
   bitrix_mode: "live" | "mock";
   persistence?: "postgres" | "memory";
+  data_mode?: "live" | "demo";
   settings: Partial<GeoSettings> & Pick<GeoSettings, "work_window" | "lunch_window" | "draft_refresh_min">;
   employees: Employee[];
   places: Place[];
@@ -77,7 +79,7 @@ const TABS: { id: Tab; label: string; icon: typeof MapPinned }[] = [
   { id: "journal", label: "Журнал дня", icon: NotebookPen },
   { id: "visits", label: "Мои визиты", icon: BriefcaseBusiness },
   { id: "places", label: "Справочник мест", icon: Landmark },
-  { id: "phone", label: "Симулятор", icon: Smartphone },
+  { id: "phone", label: "Телефон", icon: Smartphone },
   { id: "settings", label: "Настройки", icon: SlidersHorizontal },
 ];
 
@@ -283,12 +285,12 @@ export default function GeoApp() {
     setToast("Настройки сохранены, день пересчитан");
   }
 
-  async function resetDemo() {
+  async function resetLive(demo = false) {
     setBusy(true);
     try {
-      await apiMutate("/api/reset", { method: "POST" });
+      await apiMutate("/api/reset", { method: "POST", body: { demo } });
       await load();
-      setToast("Демо сброшено");
+      setToast(demo ? "Загружены демо-треки" : "Живые данные очищены");
     } finally {
       setBusy(false);
     }
@@ -305,9 +307,8 @@ export default function GeoApp() {
           <p className="brand-mark">QALQAN · геолокация</p>
           <h1 className="mt-2 font-display text-2xl text-[var(--ink)]">Вход</h1>
           <p className="mt-2 text-sm text-[var(--muted)]">
-            Админ — пароль из секрета приложения. Сотрудник — персональный PIN
-            (если настроен секрет EMPLOYEE_PIN_HASHES). У каждой сессии свои
-            данные.
+            Админ — пароль из APP_ADMIN_TOKEN. Сотрудник — PIN из
+            EMPLOYEE_PIN_HASHES. Данные компании общие (живой режим).
           </p>
           <div className="mt-4 flex gap-2">
             <button
@@ -409,10 +410,11 @@ export default function GeoApp() {
             <span className="chip">
               {data.bitrix_mode === "mock" ? "Битрикс: демо" : "Битрикс: live"}
             </span>
+            <span className="chip">Режим: живой</span>
             <span className="chip">
               {data.persistence === "postgres" ? "БД: Postgres" : "БД: память"}
             </span>
-            <span className="chip">День {data.demo_date}</span>
+            <span className="chip">День {data.work_date || data.demo_date}</span>
             <button className="btn-ghost" onClick={() => void load()} disabled={busy}>
               <RefreshCw className="h-4 w-4" /> Обновить
             </button>
@@ -698,10 +700,11 @@ export default function GeoApp() {
         )}
 
         {tab === "phone" && (
-          <PhoneSimPanel
+          <PhonePanel
             employeeId={selectedId}
             employeeName={selected?.name ?? selectedId}
             places={data.places}
+            collectionEnabled={Boolean(selected?.collection_enabled)}
             onSent={() => void load()}
             setToast={setToast}
           />
@@ -713,7 +716,8 @@ export default function GeoApp() {
             employees={data.employees}
             onSave={(patch) => void saveSettings(patch)}
             onToggle={toggleCollection}
-            onReset={() => void resetDemo()}
+            onClear={() => void resetLive(false)}
+            onLoadDemo={() => void resetLive(true)}
             busy={busy}
           />
         )}
@@ -724,48 +728,55 @@ export default function GeoApp() {
   );
 }
 
-function PhoneSimPanel({
+function PhonePanel({
   employeeId,
   employeeName,
   places,
+  collectionEnabled,
   onSent,
   setToast,
 }: {
   employeeId: string;
   employeeName: string;
   places: Place[];
+  collectionEnabled: boolean;
   onSent: () => void;
   setToast: (msg: string) => void;
 }) {
-  const [running, setRunning] = useState(false);
+  const [liveRunning, setLiveRunning] = useState(false);
+  const [simRunning, setSimRunning] = useState(false);
   const [placeId, setPlaceId] = useState("p-office");
   const [log, setLog] = useState<string[]>([]);
+  const [lastFix, setLastFix] = useState<string | null>(null);
+  const watchRef = useRef<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const deviceId = useMemo(() => {
+    if (typeof window === "undefined") return `web-${employeeId}`;
+    const key = `qalqan-device-${employeeId}`;
+    let id = localStorage.getItem(key);
+    if (!id) {
+      id = `web-${employeeId}-${Math.random().toString(36).slice(2, 10)}`;
+      localStorage.setItem(key, id);
+    }
+    return id;
+  }, [employeeId]);
 
   const place = places.find((p) => p.id === placeId) ?? places[0];
 
   useEffect(() => {
     return () => {
+      if (watchRef.current != null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchRef.current);
+      }
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
 
-  async function pushOnce(atPlace: Place, moving: boolean) {
-    const jitter = () => (Math.random() - 0.5) * 0.00025;
-    const point = {
-      device_id: `sim-${employeeId}`,
-      employee_id: employeeId,
-      ts: new Date().toISOString(),
-      lat: atPlace.lat + jitter(),
-      lon: atPlace.lon + jitter(),
-      accuracy_m: 12 + Math.round(Math.random() * 8),
-      speed_mps: moving ? 1.2 : 0,
-      is_moving: moving,
-      wifi_bssid:
-        atPlace.type === "office" ? atPlace.bssid_list[0] ?? null : null,
-      mock: false,
-      battery: 0.82,
-    };
+  function pushLog(line: string) {
+    setLog((prev) => [line, ...prev].slice(0, 16));
+  }
+
+  async function sendPoint(point: Record<string, unknown>, label: string) {
     const res = await apiMutate("/api/points", {
       method: "POST",
       body: { points: [point] },
@@ -773,84 +784,206 @@ function PhoneSimPanel({
     const json = await res.json();
     if (!res.ok) {
       setToast(json.error || "Ошибка отправки точки");
-      stop();
+      stopLive();
+      stopSim();
+      return false;
+    }
+    const t = new Date().toLocaleTimeString("ru-RU", {
+      timeZone: "Asia/Qyzylorda",
+    });
+    pushLog(`${t} · ${label} · +${json.added}`);
+    onSent();
+    return true;
+  }
+
+  async function onGeoPosition(pos: GeolocationPosition) {
+    const { latitude, longitude, accuracy, speed } = pos.coords;
+    setLastFix(
+      `${latitude.toFixed(5)}, ${longitude.toFixed(5)} ±${Math.round(accuracy)}м`,
+    );
+    const moving = typeof speed === "number" && speed > 0.5;
+    await sendPoint(
+      {
+        device_id: deviceId,
+        employee_id: employeeId,
+        ts: new Date(pos.timestamp).toISOString(),
+        lat: latitude,
+        lon: longitude,
+        accuracy_m: Math.min(accuracy || 50, 5000),
+        speed_mps: Math.max(speed ?? 0, 0),
+        is_moving: moving,
+        wifi_bssid: null,
+        mock: Boolean(
+          // Some browsers expose this on GeolocationCoordinates
+          (pos.coords as GeolocationCoordinates & { mocked?: boolean }).mocked,
+        ),
+        battery: 1,
+      },
+      "GPS",
+    );
+  }
+
+  function stopLive() {
+    if (watchRef.current != null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(watchRef.current);
+      watchRef.current = null;
+    }
+    setLiveRunning(false);
+  }
+
+  function startLive() {
+    if (!collectionEnabled) {
+      setToast("Сбор выключен для этого сотрудника — включите в Настройках");
       return;
     }
-    setLog((prev) =>
-      [
-        `${new Date().toLocaleTimeString("ru-RU", { timeZone: "Asia/Qyzylorda" })} · ${atPlace.name} · +${json.added}`,
-        ...prev,
-      ].slice(0, 12),
+    if (!navigator.geolocation) {
+      setToast("Браузер не отдаёт геолокацию");
+      return;
+    }
+    stopSim();
+    stopLive();
+    setLiveRunning(true);
+    watchRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        void onGeoPosition(pos);
+      },
+      (err) => {
+        setToast(err.message || "Нет доступа к GPS");
+        stopLive();
+      },
+      { enableHighAccuracy: true, maximumAge: 5_000, timeout: 20_000 },
     );
-    onSent();
   }
 
-  function stop() {
+  async function pushSimOnce(atPlace: Place, moving: boolean) {
+    const jitter = () => (Math.random() - 0.5) * 0.00025;
+    await sendPoint(
+      {
+        device_id: `sim-${employeeId}`,
+        employee_id: employeeId,
+        ts: new Date().toISOString(),
+        lat: atPlace.lat + jitter(),
+        lon: atPlace.lon + jitter(),
+        accuracy_m: 12 + Math.round(Math.random() * 8),
+        speed_mps: moving ? 1.2 : 0,
+        is_moving: moving,
+        wifi_bssid:
+          atPlace.type === "office" ? atPlace.bssid_list[0] ?? null : null,
+        mock: true,
+        battery: 0.82,
+      },
+      atPlace.name,
+    );
+  }
+
+  function stopSim() {
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = null;
-    setRunning(false);
+    setSimRunning(false);
   }
 
-  function start() {
+  function startSim() {
     if (!place) return;
-    stop();
-    setRunning(true);
-    void pushOnce(place, false);
+    stopLive();
+    stopSim();
+    setSimRunning(true);
+    void pushSimOnce(place, false);
     timerRef.current = setInterval(() => {
       const p = places.find((x) => x.id === placeId) ?? place;
-      void pushOnce(p, false);
+      void pushSimOnce(p, false);
     }, 8_000);
   }
 
   return (
     <section className="grid gap-4 lg:grid-cols-2">
-      <div>
-        <h2 className="section-title">Симулятор телефона</h2>
-        <p className="section-lead">
-          Имитация фоновой геолокации для {employeeName}: точки уходят на сервер
-          каждые 8 сек (как пачки с телефона).
-        </p>
-        <div className="mt-4 space-y-3 border border-[var(--line)] bg-[var(--panel)] p-4">
-          <label className="block text-sm">
-            Место
-            <select
-              className="select mt-1"
-              value={placeId}
-              disabled={running}
-              onChange={(e) => setPlaceId(e.target.value)}
-            >
-              {places
-                .filter((p) => p.status === "approved")
-                .map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <div className="flex flex-wrap gap-2">
-            {!running ? (
-              <button className="btn" type="button" onClick={start}>
-                Начать сбор
-              </button>
-            ) : (
-              <button className="btn-danger" type="button" onClick={stop}>
-                Остановить
-              </button>
-            )}
-            <button
-              className="btn-ghost"
-              type="button"
-              disabled={!place}
-              onClick={() => place && void pushOnce(place, true)}
-            >
-              Одна точка сейчас
-            </button>
-          </div>
-          <p className="text-xs text-[var(--muted)]">
-            В офисе точка получает BSSID офисного Wi‑Fi. Смените место и
-            перезапустите сбор, чтобы смоделировать визит.
+      <div className="space-y-4">
+        <div>
+          <h2 className="section-title">Живой GPS</h2>
+          <p className="section-lead">
+            Реальная геолокация браузера для {employeeName}. Точки уходят в общую
+            базу компании.
           </p>
+          <div className="mt-4 space-y-3 border border-[var(--line)] bg-[var(--panel)] p-4">
+            <p className="text-sm text-[var(--muted)]">
+              {collectionEnabled
+                ? "Сбор включён"
+                : "Сбор выключен — админ включает в Настройках"}
+            </p>
+            {lastFix && (
+              <p className="text-sm">
+                Последняя фиксация: <span className="text-[var(--ink)]">{lastFix}</span>
+              </p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              {!liveRunning ? (
+                <button className="btn" type="button" onClick={startLive}>
+                  Включить GPS
+                </button>
+              ) : (
+                <button className="btn-danger" type="button" onClick={stopLive}>
+                  Остановить GPS
+                </button>
+              )}
+              <button
+                className="btn-ghost"
+                type="button"
+                onClick={() => {
+                  if (!navigator.geolocation) {
+                    setToast("Браузер не отдаёт геолокацию");
+                    return;
+                  }
+                  navigator.geolocation.getCurrentPosition(
+                    (pos) => void onGeoPosition(pos),
+                    (err) => setToast(err.message || "Нет GPS"),
+                    { enableHighAccuracy: true, timeout: 20_000 },
+                  );
+                }}
+              >
+                Одна точка сейчас
+              </button>
+            </div>
+            <p className="text-xs text-[var(--muted)]">
+              Разрешите доступ к местоположению в браузере. На HTTPS (publish)
+              GPS работает; локально — тоже на localhost.
+            </p>
+          </div>
+        </div>
+
+        <div>
+          <h3 className="font-display text-xl">Проверка без выезда</h3>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Симулятор места (точки помечаются как mock и не копят рабочее время).
+          </p>
+          <div className="mt-3 space-y-3 border border-[var(--line)] bg-[var(--panel)] p-4">
+            <label className="block text-sm">
+              Место
+              <select
+                className="select mt-1"
+                value={placeId}
+                disabled={simRunning}
+                onChange={(e) => setPlaceId(e.target.value)}
+              >
+                {places
+                  .filter((p) => p.status === "approved")
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {!simRunning ? (
+                <button className="btn-ghost" type="button" onClick={startSim}>
+                  Симулировать
+                </button>
+              ) : (
+                <button className="btn-danger" type="button" onClick={stopSim}>
+                  Стоп симуляции
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
       <div>
@@ -876,14 +1009,16 @@ function SettingsPanel({
   employees,
   onSave,
   onToggle,
-  onReset,
+  onClear,
+  onLoadDemo,
   busy,
 }: {
   settings: GeoSettings;
   employees: Employee[];
   onSave: (patch: Partial<GeoSettings>) => void;
   onToggle: (id: string, enabled: boolean) => void;
-  onReset: () => void;
+  onClear: () => void;
+  onLoadDemo: () => void;
   busy: boolean;
 }) {
   const [visitMin, setVisitMin] = useState(settings.visit_min);
@@ -968,9 +1103,14 @@ function SettingsPanel({
             </li>
           ))}
         </ul>
-        <button className="btn-danger mt-4" onClick={onReset} disabled={busy}>
-          Сбросить демо-данные
-        </button>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button className="btn-danger" onClick={onClear} disabled={busy}>
+            Очистить живые данные
+          </button>
+          <button className="btn-ghost" onClick={onLoadDemo} disabled={busy}>
+            Загрузить демо-треки
+          </button>
+        </div>
       </div>
     </section>
   );

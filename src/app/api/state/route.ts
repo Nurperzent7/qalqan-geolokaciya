@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { guardRead, storeScopeFor } from "@/lib/api-guard";
 import { hasBitrixWebhook } from "@/lib/bitrix";
+import { todayDate } from "@/lib/calendar";
 import { hasDatabase } from "@/lib/db";
-import { DEMO_DATE } from "@/lib/seed";
 import {
   scopeCases,
   scopeDays,
@@ -21,17 +21,20 @@ export async function GET(req: Request) {
 
   const scopeId = storeScopeFor(auth);
   const s = await ensureStoreReady(scopeId);
+  const workDate = todayDate();
   const employees = scopeEmployees(s.employees, auth);
   const visits = scopeVisits(s.visits, auth);
   const places = scopePlaces(s.places, auth);
-  const days = scopeDays(s.days, auth, DEMO_DATE);
+  const days = scopeDays(s.days, auth, workDate);
   const punches = scopePunches(s.punches, auth);
   const cases = scopeCases(s.cases, s.visits, auth);
 
   return NextResponse.json({
-    demo_date: DEMO_DATE,
+    demo_date: workDate,
+    work_date: workDate,
     bitrix_mode: hasBitrixWebhook() ? "live" : "mock",
     persistence: hasDatabase() ? "postgres" : "memory",
+    data_mode: "live",
     viewer: {
       email: auth.email,
       name: auth.name,
@@ -55,8 +58,8 @@ export async function GET(req: Request) {
     punches,
     cases,
     viewer_id: auth.employeeId ?? s.viewerId,
-    sample_notice: auth.canManage
-      ? "Админ: изолированная песочница этой сессии (не общая база всех посетителей)."
-      : "Сотрудник: только ваши данные в вашей сессии.",
+    sample_notice: hasBitrixWebhook()
+      ? "Живой режим: общая база компании, отметки в Битрикс через вебхук."
+      : "Живой режим: общая база компании. Задайте BITRIX_WEBHOOK_URL для live-отметок в Битрикс.",
   });
 }

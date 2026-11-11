@@ -7,9 +7,19 @@ export async function POST(req: Request) {
   if (auth instanceof NextResponse) return auth;
   const scopeId = storeScopeFor(auth);
   await ensureStoreReady(scopeId);
-  const s = resetStore(scopeId);
+
+  let demo = false;
+  try {
+    const body = (await req.json()) as { demo?: boolean };
+    demo = Boolean(body?.demo);
+  } catch {
+    demo = false;
+  }
+
+  const s = resetStore(scopeId, { demo });
   return NextResponse.json({
     ok: true,
+    mode: demo ? "demo" : "live",
     employees: s.employees.length,
     points: s.points.length,
     actor: auth.email,

@@ -7,9 +7,9 @@ import {
   staysToVisits,
 } from "./geo";
 import { DEFAULT_SETTINGS } from "./settings";
+import { todayDate } from "./calendar";
 import {
   CASE_OPTIONS,
-  DEMO_DATE,
   EMPLOYEES,
   PLACES,
   seedPointsForAigerim,
@@ -65,32 +65,47 @@ function snapshotKey(scopeId: string) {
   return `store:${scopeId}`;
 }
 
-function dayKey(employeeId: string, date = DEMO_DATE) {
+function dayKey(employeeId: string, date = todayDate()) {
   return `${employeeId}:${date}`;
 }
 
-function createInitial(): StoreState {
+function liveEmployees(): Employee[] {
+  return EMPLOYEES.map((e) => ({
+    ...e,
+    last_lat: null,
+    last_lon: null,
+    last_status: e.collection_enabled ? "Ожидание точки" : "Сбор выключен",
+    last_seen_at: null,
+  }));
+}
+
+/** Empty live company state: roster + places, no fake tracks. */
+function createInitial(withDemoTracks = false): StoreState {
   const settings = { ...DEFAULT_SETTINGS };
-  const employees = EMPLOYEES.map((e) => ({ ...e }));
+  const employees = liveEmployees();
   const places = PLACES.map((p) => ({ ...p }));
-  const points = [
-    ...seedPointsForAskar(),
-    ...seedPointsForAnn(),
-    ...seedPointsForAigerim(),
-  ];
   const caseHints: StoreState["caseHints"] = {};
-  caseHints["stay-e-askar-20"] = {
-    id: "case-55",
-    title: "Дело №55 — заседание Спецсуд",
-  };
-  caseHints["stay-e-ann-3"] = {
-    id: "case-55",
-    title: "Дело №55 — заседание Спецсуд",
-  };
-  caseHints["stay-e-aigerim-4"] = {
-    id: "case-101",
-    title: "Дело №101 — Нұрлы жол / иск",
-  };
+  const points = withDemoTracks
+    ? [
+        ...seedPointsForAskar(),
+        ...seedPointsForAnn(),
+        ...seedPointsForAigerim(),
+      ]
+    : [];
+  if (withDemoTracks) {
+    caseHints["stay-e-askar-20"] = {
+      id: "case-55",
+      title: "Дело №55 — заседание Спецсуд",
+    };
+    caseHints["stay-e-ann-3"] = {
+      id: "case-55",
+      title: "Дело №55 — заседание Спецсуд",
+    };
+    caseHints["stay-e-aigerim-4"] = {
+      id: "case-101",
+      title: "Дело №101 — Нұрлы жол / иск",
+    };
+  }
 
   const state: StoreState = {
     settings,
@@ -134,7 +149,7 @@ function schedulePersist(scopeId: string) {
   );
 }
 
-/** Per-session / per-visitor sandbox. Never shares one global snapshot across visitors. */
+/** Shared live company store (or local memory fallback). */
 export async function ensureStoreReady(scopeId: string): Promise<StoreState> {
   if (!scopeId) throw new Error("store scope required");
   if (!hasDatabase()) {
@@ -155,7 +170,7 @@ export async function ensureStoreReady(scopeId: string): Promise<StoreState> {
           stores().set(scopeId, snap);
           recomputeAll(snap);
         } else {
-          const fresh = createInitial();
+          const fresh = createInitial(false);
           stores().set(scopeId, fresh);
           await saveSnapshot(snapshotKey(scopeId), fresh);
         }
@@ -166,8 +181,8 @@ export async function ensureStoreReady(scopeId: string): Promise<StoreState> {
   return getStore(scopeId);
 }
 
-export function resetStore(scopeId: string) {
-  const fresh = createInitial();
+export function resetStore(scopeId: string, opts?: { demo?: boolean }) {
+  const fresh = createInitial(Boolean(opts?.demo));
   stores().set(scopeId, fresh);
   schedulePersist(scopeId);
   return fresh;
@@ -228,7 +243,7 @@ function recomputeEmployee(state: StoreState, employeeId: string) {
 
   const summary = buildDaySummary(
     employeeId,
-    DEMO_DATE,
+    todayDate(),
     officeInts,
     visits,
     stays,

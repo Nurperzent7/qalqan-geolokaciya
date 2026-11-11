@@ -166,14 +166,17 @@ export function isPreview(principal: AccessPrincipal): boolean {
   return principal.stage === "preview";
 }
 
-/** Isolate data per login session — hash so the bearer token never becomes a store key. */
-export function storeScopeFor(principal: AccessPrincipal): string {
-  if (principal.sessionId) {
-    return storeScopeFromToken(principal.sessionId);
-  }
-  const email = principal.email || "unknown";
-  const h = createHash("sha256").update(email).digest("hex").slice(0, 32);
-  return `cursor:${h}`;
+/**
+ * Shared live company store for all authenticated sessions.
+ * (Legacy per-session sandboxes used storeScopeFromToken — no longer for live data.)
+ */
+export function storeScopeFor(_principal: AccessPrincipal): string {
+  return "live:company";
+}
+
+/** @deprecated kept for GC of old session sandboxes */
+export function legacySessionStoreScope(sessionId: string): string {
+  return storeScopeFromToken(sessionId);
 }
 
 /**
