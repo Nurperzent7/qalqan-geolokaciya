@@ -146,6 +146,11 @@ export default function GeoApp() {
           setError(
             "Вход сотрудника выключен. Выберите «Админ» и пароль из APP_ADMIN_TOKEN.",
           );
+        } else if (json.error === "admin_secret_missing") {
+          setError(
+            json.detail ||
+              "В Secrets нет APP_ADMIN_TOKEN. Имя должно быть точно APP_ADMIN_TOKEN.",
+          );
         } else if (json.error === "invalid credentials") {
           setError("Неверный пароль. Проверьте APP_ADMIN_TOKEN в Secrets.");
         } else if (json.error === "rate_limited") {

@@ -108,11 +108,16 @@ export async function revokeSession(token: string | null): Promise<void> {
 export function adminSecretsMatch(presented: string): {
   ok: boolean;
   simulated: boolean;
+  missing?: boolean;
 } {
-  // Trim + strip wrapping quotes sometimes pasted into Secrets UI
-  const expected = process.env.APP_ADMIN_TOKEN?.trim().replace(/^["']|["']$/g, "");
+  // Dynamic key so Next never inlines an empty value at build time
+  const raw = process.env["APP_ADMIN_TOKEN"];
+  const expected = raw?.trim().replace(/^["']|["']$/g, "") ?? "";
   const got = presented.trim().replace(/^["']|["']$/g, "");
-  if (!expected || !got) {
+  if (!expected) {
+    return { ok: false, simulated: false, missing: true };
+  }
+  if (!got) {
     return { ok: false, simulated: false };
   }
   return { ok: secretsEqual(got, expected), simulated: false };

@@ -8,6 +8,9 @@ import { rateLimit } from "@/lib/rate-limit";
 import { EMPLOYEES } from "@/lib/seed";
 import { adminSecretsMatch, createSession } from "@/lib/sessions";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 export async function POST(req: Request) {
   const csrf = requireCsrf(req);
   if (csrf) return csrf;
@@ -45,6 +48,16 @@ export async function POST(req: Request) {
   if (body.role === "admin") {
     const match = adminSecretsMatch(password);
     if (!match.ok) {
+      if (match.missing) {
+        return NextResponse.json(
+          {
+            error: "admin_secret_missing",
+            detail:
+              "Секрет APP_ADMIN_TOKEN не задан (проверьте имя: TOKEN, не TOKEM).",
+          },
+          { status: 401 },
+        );
+      }
       return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
     }
     const { token, session } = await createSession({
