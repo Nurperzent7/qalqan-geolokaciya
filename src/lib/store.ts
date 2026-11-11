@@ -40,6 +40,8 @@ interface StoreState {
   caseHints: Record<string, { id: string; title: string } | null>;
   /** scrypt hashes keyed by employee id — never return plaintext via API. */
   pinHashes: Record<string, string>;
+  /** Bumped when employee secret policy changes (forces re-issue). */
+  authV2?: boolean;
   viewerId: string;
 }
 
@@ -143,6 +145,7 @@ function createInitial(withDemoTracks = false): StoreState {
     cases: CASE_OPTIONS,
     caseHints,
     pinHashes: {},
+    authV2: true,
     viewerId: employees[0]?.id ?? "",
   };
   recomputeAll(state);
@@ -238,6 +241,12 @@ export async function ensureStoreReady(scopeId: string): Promise<StoreState> {
           snap.places = snap.places.map((p) => ({ ...p, bssid_list: [] }));
           if (!snap.pinHashes || typeof snap.pinHashes !== "object") {
             snap.pinHashes = {};
+          }
+          // Invalidate legacy 6-digit PIN hashes — require strong re-issue.
+          if (!snap.authV2) {
+            snap.pinHashes = {};
+            snap.authV2 = true;
+            await saveSnapshot(snapshotKey(scopeId), snap);
           }
           stores().set(scopeId, snap);
           recomputeAll(snap);
@@ -378,7 +387,7 @@ export function employeeHasPin(scopeId: string, employeeId: string): boolean {
   return Boolean(state.pinHashes?.[employeeId]);
 }
 
-/** Issue or rotate PINs. Returns plaintext once for the admin to copy. */
+/** Issue or rotate strong employee passwords. Returns plaintext once. */
 export function issueEmployeePins(
   scopeId: string,
   opts?: { employeeId?: string; onlyMissing?: boolean },
@@ -398,6 +407,15 @@ export function issueEmployeePins(
   }
   if (issued.length) schedulePersist(scopeId);
   return issued;
+}
+
+/** Drop legacy weak hashes so admins must re-issue strong passwords. */
+export function clearAllEmployeePins(scopeId: string): number {
+  const state = getStore(scopeId);
+  const n = Object.keys(state.pinHashes || {}).length;
+  state.pinHashes = {};
+  if (n) schedulePersist(scopeId);
+  return n;
 }
 
 export function getPinHashes(scopeId: string): Record<string, string> {

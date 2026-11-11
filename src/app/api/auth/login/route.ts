@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireCsrf, rateLimitKey, storeScopeFor } from "@/lib/api-guard";
-import { verifyEmployeeCredential } from "@/lib/pins";
+import { burnVerifyCost, verifyEmployeeCredential } from "@/lib/pins";
 import { rateLimit } from "@/lib/rate-limit";
 import { adminSecretsMatch, createSession } from "@/lib/sessions";
 import {
@@ -18,7 +18,8 @@ export async function POST(req: Request) {
   const csrf = requireCsrf(req);
   if (csrf) return csrf;
 
-  const limited = await rateLimit(rateLimitKey(req, "login"), 10, 15 * 60_000);
+  // Tighter login budget on public host (per IP).
+  const limited = await rateLimit(rateLimitKey(req, "login"), 5, 15 * 60_000);
   if (!limited.ok) {
     return NextResponse.json(
       {
@@ -83,28 +84,52 @@ export async function POST(req: Request) {
   if (body.role === "employee") {
     const employeeId =
       typeof body.employee_id === "string" ? body.employee_id.slice(0, 64) : "";
-    if (!employeeId) {
-      return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
+
+    // Extra bucket per attempted employee id (slows targeted guessing).
+    if (employeeId) {
+      const idLimited = await rateLimit(
+        `login-emp:${employeeId}`,
+        8,
+        30 * 60_000,
+      );
+      if (!idLimited.ok) {
+        return NextResponse.json(
+          {
+            error: "rate_limited",
+            detail: `Слишком много попыток. Подождите ${idLimited.retryAfterSec} с.`,
+          },
+          {
+            status: 429,
+            headers: { "Retry-After": String(idLimited.retryAfterSec) },
+          },
+        );
+      }
     }
 
     await ensureStoreReady(COMPANY).catch(() => null);
-    const emp = getStore(COMPANY).employees.find((e) => e.id === employeeId);
-    if (!emp) {
-      return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
-    }
-    if (!verifyEmployeeCredential(employeeId, password, getPinHashes(COMPANY))) {
+    const emp = employeeId
+      ? getStore(COMPANY).employees.find((e) => e.id === employeeId)
+      : undefined;
+    const hashes = getPinHashes(COMPANY);
+
+    // Always pay scrypt cost so missing id vs bad password look alike.
+    const ok =
+      Boolean(emp) &&
+      verifyEmployeeCredential(employeeId, password, hashes);
+    if (!ok) {
+      if (!emp || !hashes[employeeId]) burnVerifyCost();
       return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
     }
 
     const { token, session } = await createSession({
       role: "employee",
-      employeeId: emp.id,
-      name: emp.name,
+      employeeId: emp!.id,
+      name: emp!.name,
     });
     return NextResponse.json({
       token,
       role: session.role,
-      employee_id: emp.id,
+      employee_id: emp!.id,
       name: session.name,
     });
   }

@@ -1,5 +1,11 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 
+/** Minimum employee secret length on deployed hosts (blocks 6-digit PINs). */
+export const MIN_EMPLOYEE_SECRET_LEN = 12;
+
+const ALPHABET =
+  "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"; // no 0/O/1/l
+
 export function hashPin(pin: string, salt?: string): string {
   const s = salt ?? randomBytes(16).toString("hex");
   const hash = scryptSync(pin, s, 32).toString("hex");
@@ -15,10 +21,22 @@ export function verifyPin(pin: string, stored: string): boolean {
   return timingSafeEqual(prev, next);
 }
 
-/** Six-digit numeric PIN for employees. */
+/**
+ * Strong employee password: 16 chars from mixed alphabet (~94 bits).
+ * Replaces weak 6-digit numeric PINs for public deployment.
+ */
 export function generateEmployeePin(): string {
-  const n = randomBytes(4).readUInt32BE(0) % 1_000_000;
-  return String(n).padStart(6, "0");
+  const bytes = randomBytes(16);
+  let out = "";
+  for (let i = 0; i < 16; i += 1) {
+    out += ALPHABET[bytes[i]! % ALPHABET.length];
+  }
+  return out;
+}
+
+/** Dummy scrypt so missing-user and bad-password paths take similar time. */
+export function burnVerifyCost(): void {
+  verifyPin("timing-pad-value", hashPin("timing-pad-value"));
 }
 
 function isDeployedHost(): boolean {
@@ -45,22 +63,24 @@ export function pinHashesFromEnv(): Record<string, string> | null {
 }
 
 /**
- * Check PIN against store hashes first, then env secret.
- * Local non-deployed hosts accept any 4–32 char PIN when no hash is set.
+ * Check secret against store hashes first, then env.
+ * Deployed hosts require ≥12 characters (old 6-digit PINs no longer work).
  */
 export function verifyEmployeeCredential(
   employeeId: string,
   pin: string,
   storeHashes?: Record<string, string> | null,
 ): boolean {
-  if (!pin || pin.length < 4 || pin.length > 64) return false;
+  if (!pin || pin.length > 64) return false;
+  if (isDeployedHost() && pin.length < MIN_EMPLOYEE_SECRET_LEN) return false;
+  if (!isDeployedHost() && pin.length < 4) return false;
+
   const stored = storeHashes?.[employeeId] || pinHashesFromEnv()?.[employeeId];
   if (stored) return verifyPin(pin, stored);
   if (!isDeployedHost()) return true;
   return false;
 }
 
-/** Employee tab is always offered; login succeeds only with a issued/env PIN. */
 export function employeeLoginAvailable(): boolean {
   return true;
 }

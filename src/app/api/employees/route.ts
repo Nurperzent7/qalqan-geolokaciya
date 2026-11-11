@@ -58,7 +58,7 @@ export async function POST(req: Request) {
       ok: true,
       issued,
       notice:
-        "Сохраните PIN сейчас — повторно они не показываются, только перевыпуск.",
+        "Сохраните пароль сейчас — повторно не показывается, только перевыпуск.",
       employees: scopeEmployees(getStore(scopeId).employees, auth).map((e) => ({
         ...e,
         has_pin: employeeHasPin(scopeId, e.id),

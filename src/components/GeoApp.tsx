@@ -348,8 +348,8 @@ export default function GeoApp() {
           <p className="brand-mark">QALQAN · геолокация</p>
           <h1 className="mt-2 font-display text-2xl text-[var(--ink)]">Вход</h1>
           <p className="mt-2 text-sm text-[var(--muted)]">
-            Админ — пароль из Secrets. Сотрудник — ID вида bx-21 и PIN, который
-            выдаёт админ в Настройках.
+            Админ — пароль из Secrets. Сотрудник — ID вида bx-21 и длинный
+            пароль (12+ символов), который выдаёт админ в Настройках.
           </p>
           <div className="mt-4 flex gap-2">
             <button
@@ -387,7 +387,9 @@ export default function GeoApp() {
             className="input mt-3"
             type="password"
             autoComplete="current-password"
-            placeholder={loginRole === "admin" ? "Пароль админа" : "PIN"}
+            placeholder={
+              loginRole === "admin" ? "Пароль админа" : "Пароль сотрудника"
+            }
             value={tokenInput}
             onChange={(e) => setTokenInput(e.target.value)}
           />
@@ -1142,9 +1144,13 @@ function SettingsPanel({
             disabled={busy || !employees.length}
             onClick={() => onIssuePins()}
           >
-            Выдать PIN всем без PIN
+            Выдать пароли всем без пароля
           </button>
         </div>
+        <p className="mt-2 text-xs text-[var(--muted)]">
+          Пароль сотрудника — 16 символов (буквы и цифры). Старые 6-значные PIN
+          больше не действуют: выдайте заново.
+        </p>
         {!employees.length ? (
           <p className="mt-4 text-sm text-[var(--muted)]">
             Список пуст — нажмите «Обновить из Битрикс».
@@ -1159,7 +1165,7 @@ function SettingsPanel({
                 <div>
                   <p className="font-medium">{e.name}</p>
                   <p className="text-xs text-[var(--muted)]">
-                    {e.id} · {e.title || "—"} · PIN:{" "}
+                    {e.id} · {e.title || "—"} · пароль:{" "}
                     {e.has_pin ? "выдан" : "нет"} · согласие:{" "}
                     {e.consent_at ? "есть" : "нет"}
                   </p>
@@ -1171,7 +1177,7 @@ function SettingsPanel({
                     disabled={busy}
                     onClick={() => onIssuePins(e.id)}
                   >
-                    {e.has_pin ? "Новый PIN" : "Выдать PIN"}
+                    {e.has_pin ? "Новый пароль" : "Выдать пароль"}
                   </button>
                   <button
                     className={cn(
