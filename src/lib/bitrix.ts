@@ -78,6 +78,7 @@ type BitrixUser = {
   NAME?: string;
   LAST_NAME?: string;
   SECOND_NAME?: string;
+  EMAIL?: string;
   WORK_POSITION?: string;
   ACTIVE?: boolean | string;
   UF_DEPARTMENT?: number[];
@@ -88,7 +89,11 @@ function mapBitrixUser(u: BitrixUser): Employee | null {
   if (!Number.isFinite(idNum) || idNum <= 0) return null;
   const active = u.ACTIVE === true || u.ACTIVE === "Y" || u.ACTIVE === undefined;
   if (!active) return null;
-  const name = [u.NAME, u.LAST_NAME].filter(Boolean).join(" ").trim() || `User ${idNum}`;
+  const full = [u.NAME, u.LAST_NAME, u.SECOND_NAME]
+    .filter((p) => typeof p === "string" && p.trim())
+    .join(" ")
+    .trim();
+  const name = full || (typeof u.EMAIL === "string" ? u.EMAIL : "") || `User ${idNum}`;
   return {
     id: `bx-${idNum}`,
     name,
