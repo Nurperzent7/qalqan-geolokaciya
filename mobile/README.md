@@ -16,7 +16,26 @@ https://qalqan-geolokaciya.apps.grok.bot
 
 На телефоне: геолокация **«Всегда» / Always**.
 
-## Android
+## Android (бесплатно, без Play Store)
+
+### Готовый debug APK
+
+После сборки файл лежит рядом с проектом:
+
+`Desktop\qalqan geo\qalqan-geolokaciya-debug.apk`
+
+Пересобрать:
+
+```powershell
+cd mobile
+npm install
+npx cap sync android
+powershell -ExecutionPolicy Bypass -File .\scripts\build-android-apk.ps1
+```
+
+Нужны: **JDK 21**, Android SDK (`%LOCALAPPDATA%\Android\Sdk`), AEHD для эмулятора.
+
+### Android Studio / эмулятор
 
 ```bash
 cd mobile
@@ -25,7 +44,8 @@ npx cap sync android
 npx cap open android
 ```
 
-Build → Build APK(s) или Run на устройстве.
+В Android Studio: Device Manager → создать/запустить Virtual Device → Run.  
+На телефон сотруднику: скопировать `.apk` и разрешить установку из неизвестных источников.
 
 ## iOS
 
