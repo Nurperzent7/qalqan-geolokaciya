@@ -3,6 +3,11 @@
 #
 # Setup: https://codemagic.io → GitHub Nurperzent7/qalqan-geolokaciya
 # Bundle ID: kz.qalqan.geolokaciya
+#
+# Before first build:
+# 1) Teams → Integrations → App Store Connect (name the integration exactly: codemagic)
+# 2) Code signing for kz.qalqan.geolokaciya
+# 3) Start workflow "QALQAN iOS"
 
 workflows:
   ios-qalqan:
@@ -10,7 +15,6 @@ workflows:
     max_build_duration: 60
     instance_type: mac_mini_m2
     integrations:
-      # Codemagic → Teams → Integrations → App Store Connect (name must match)
       app_store_connect: codemagic
     environment:
       ios_signing:
@@ -42,12 +46,6 @@ workflows:
       - mobile/ios/App/build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
     publishing:
-      email:
-        recipients:
-          - $CM_COMMIT_AUTHOR_EMAIL
-        notify:
-          success: true
-          failure: true
       app_store_connect:
         auth: integration
         submit_to_testflight: true
