@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
-import { guardManage, guardRead, storeScopeFor } from "@/lib/api-guard";
+import { guardManage, storeScopeFor } from "@/lib/api-guard";
 import { parseSettingsPatch } from "@/lib/settings-parse";
 import { ensureStoreReady, getStore, updateSettings } from "@/lib/store";
 
+/** Full settings — admins only (employees get a stripped subset via /api/state). */
 export async function GET(req: Request) {
-  const auth = await guardRead(req);
+  const auth = await guardManage(req);
   if (auth instanceof NextResponse) return auth;
   const scopeId = storeScopeFor(auth);
   await ensureStoreReady(scopeId);

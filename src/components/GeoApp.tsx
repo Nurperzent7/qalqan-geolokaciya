@@ -304,6 +304,39 @@ export default function GeoApp() {
     }
   }
 
+  async function issuePins(employeeId?: string) {
+    setBusy(true);
+    try {
+      const res = await apiMutate("/api/employees", {
+        method: "POST",
+        body: {
+          action: "issue_pins",
+          employee_id: employeeId,
+          only_missing: !employeeId,
+        },
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        issued?: Array<{ id: string; name: string; pin: string }>;
+        notice?: string;
+      };
+      if (!res.ok || !json.issued?.length) {
+        setToast("Новых PIN нет — у всех уже есть, или список пуст");
+        await load();
+        return;
+      }
+      const lines = json.issued.map((p) => `${p.name} (${p.id}): ${p.pin}`);
+      setToast(`PIN выданы — сохраните:\n${lines.join(" · ")}`);
+      // Also surface in alert so admin can copy comfortably
+      window.alert(
+        `${json.notice || "Сохраните PIN сейчас:"}\n\n${lines.join("\n")}`,
+      );
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (needsToken && !data) {
     return (
       <div className="flex min-h-screen items-center justify-center p-6">
@@ -315,8 +348,8 @@ export default function GeoApp() {
           <p className="brand-mark">QALQAN · геолокация</p>
           <h1 className="mt-2 font-display text-2xl text-[var(--ink)]">Вход</h1>
           <p className="mt-2 text-sm text-[var(--muted)]">
-            Админ — пароль из Secrets. Сотрудники и отметки — с портала{" "}
-            qalqanadvisors.bitrix24.kz после настройки вебхука.
+            Админ — пароль из Secrets. Сотрудник — ID вида bx-21 и PIN, который
+            выдаёт админ в Настройках.
           </p>
           <div className="mt-4 flex gap-2">
             <button
@@ -728,6 +761,7 @@ export default function GeoApp() {
             onClear={() => void resetLive(false)}
             onLoadDemo={() => void resetLive(true)}
             onSyncBitrix={() => void syncBitrixEmployees()}
+            onIssuePins={(id) => void issuePins(id)}
             busy={busy}
             bitrixLive={data.bitrix_mode === "live"}
           />
@@ -933,16 +967,18 @@ function SettingsPanel({
   onClear,
   onLoadDemo,
   onSyncBitrix,
+  onIssuePins,
   busy,
   bitrixLive,
 }: {
   settings: GeoSettings;
-  employees: Employee[];
+  employees: Array<Employee & { has_pin?: boolean }>;
   onSave: (patch: Partial<GeoSettings>) => void;
   onToggle: (id: string, enabled: boolean) => void;
   onClear: () => void;
   onLoadDemo: () => void;
   onSyncBitrix: () => void;
+  onIssuePins: (employeeId?: string) => void;
   busy: boolean;
   bitrixLive: boolean;
 }) {
@@ -1009,14 +1045,24 @@ function SettingsPanel({
         <p className="section-lead">
           Список из портала. Без согласия сбор не включается.
         </p>
-        <button
-          className="btn mt-3"
-          type="button"
-          disabled={busy}
-          onClick={onSyncBitrix}
-        >
-          {bitrixLive ? "Обновить из Битрикс" : "Битрикс не подключён"}
-        </button>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            className="btn"
+            type="button"
+            disabled={busy}
+            onClick={onSyncBitrix}
+          >
+            {bitrixLive ? "Обновить из Битрикс" : "Битрикс не подключён"}
+          </button>
+          <button
+            className="btn-ghost"
+            type="button"
+            disabled={busy || !employees.length}
+            onClick={() => onIssuePins()}
+          >
+            Выдать PIN всем без PIN
+          </button>
+        </div>
         {!employees.length ? (
           <p className="mt-4 text-sm text-[var(--muted)]">
             Список пуст — нажмите «Обновить из Битрикс».
@@ -1026,24 +1072,35 @@ function SettingsPanel({
             {employees.map((e) => (
               <li
                 key={e.id}
-                className="flex items-center justify-between border border-[var(--line)] bg-[var(--panel)] px-3 py-3"
+                className="flex flex-col gap-2 border border-[var(--line)] bg-[var(--panel)] px-3 py-3 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div>
                   <p className="font-medium">{e.name}</p>
                   <p className="text-xs text-[var(--muted)]">
-                    {e.id} · {e.title || "—"} · согласие:{" "}
+                    {e.id} · {e.title || "—"} · PIN:{" "}
+                    {e.has_pin ? "выдан" : "нет"} · согласие:{" "}
                     {e.consent_at ? "есть" : "нет"}
                   </p>
                 </div>
-                <button
-                  className={cn(
-                    "btn-ghost",
-                    e.collection_enabled && "tab-active",
-                  )}
-                  onClick={() => onToggle(e.id, !e.collection_enabled)}
-                >
-                  {e.collection_enabled ? "Выключить" : "Включить"}
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    className="btn-ghost"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onIssuePins(e.id)}
+                  >
+                    {e.has_pin ? "Новый PIN" : "Выдать PIN"}
+                  </button>
+                  <button
+                    className={cn(
+                      "btn-ghost",
+                      e.collection_enabled && "tab-active",
+                    )}
+                    onClick={() => onToggle(e.id, !e.collection_enabled)}
+                  >
+                    {e.collection_enabled ? "Выключить сбор" : "Включить сбор"}
+                  </button>
+                </div>
               </li>
             ))}
           </ul>

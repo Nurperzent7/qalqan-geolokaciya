@@ -1,15 +1,18 @@
 import { NextResponse } from "next/server";
 import { requireCsrf, rateLimitKey, storeScopeFor } from "@/lib/api-guard";
-import {
-  employeeLoginAvailable,
-  verifyEmployeeCredential,
-} from "@/lib/pins";
+import { verifyEmployeeCredential } from "@/lib/pins";
 import { rateLimit } from "@/lib/rate-limit";
 import { adminSecretsMatch, createSession } from "@/lib/sessions";
-import { ensureStoreReady, getStore } from "@/lib/store";
+import {
+  ensureStoreReady,
+  getPinHashes,
+  getStore,
+} from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const COMPANY = "live:company";
 
 export async function POST(req: Request) {
   const csrf = requireCsrf(req);
@@ -58,7 +61,6 @@ export async function POST(req: Request) {
       employeeId: null,
       name: match.simulated ? "Local Admin" : "Admin",
     });
-    // Warm company store + Bitrix roster for the new admin session.
     const principal = {
       email: "admin@app",
       name: session.name,
@@ -79,34 +81,18 @@ export async function POST(req: Request) {
   }
 
   if (body.role === "employee") {
-    if (!employeeLoginAvailable()) {
-      return NextResponse.json(
-        { error: "employee_login_disabled" },
-        { status: 403 },
-      );
-    }
     const employeeId =
       typeof body.employee_id === "string" ? body.employee_id.slice(0, 64) : "";
-    if (!employeeId || !verifyEmployeeCredential(employeeId, password)) {
+    if (!employeeId) {
       return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
     }
 
-    // Resolve name from company roster (Bitrix) — never from a public directory.
-    const warm = {
-      email: `${employeeId}@employee`,
-      name: employeeId,
-      simulated: false,
-      stage: "production" as const,
-      canManage: false,
-      employeeId,
-      source: "session" as const,
-      sessionId: null,
-    };
-    await ensureStoreReady(storeScopeFor(warm)).catch(() => null);
-    const emp = getStore(storeScopeFor(warm)).employees.find(
-      (e) => e.id === employeeId,
-    );
+    await ensureStoreReady(COMPANY).catch(() => null);
+    const emp = getStore(COMPANY).employees.find((e) => e.id === employeeId);
     if (!emp) {
+      return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
+    }
+    if (!verifyEmployeeCredential(employeeId, password, getPinHashes(COMPANY))) {
       return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
     }
 

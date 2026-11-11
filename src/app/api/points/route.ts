@@ -94,7 +94,20 @@ export async function POST(req: Request) {
   }
 
   const scopeId = storeScopeFor(viewer);
-  await ensureStoreReady(scopeId);
+  const store = await ensureStoreReady(scopeId);
+  const target = store.employees.find((e) => e.id === employeeId);
+  if (!target) {
+    return NextResponse.json({ error: "employee not found" }, { status: 404 });
+  }
+  if (!target.collection_enabled || !target.consent_at) {
+    return NextResponse.json(
+      {
+        error: "collection_disabled",
+        detail: "Сбор геолокации выключен для этого сотрудника",
+      },
+      { status: 403 },
+    );
+  }
 
   const cleaned: RawPoint[] = [];
   for (const raw of body.points) {

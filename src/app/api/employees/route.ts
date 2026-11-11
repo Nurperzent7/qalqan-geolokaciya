@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 import { guardManage, guardRead, storeScopeFor } from "@/lib/api-guard";
 import { scopeEmployees } from "@/lib/scope";
 import {
+  employeeHasPin,
   ensureStoreReady,
   getStore,
+  issueEmployeePins,
   setCollection,
   syncEmployeesFromBitrix,
 } from "@/lib/store";
@@ -13,7 +15,11 @@ export async function GET(req: Request) {
   if (auth instanceof NextResponse) return auth;
   const scopeId = storeScopeFor(auth);
   await ensureStoreReady(scopeId);
-  return NextResponse.json(scopeEmployees(getStore(scopeId).employees, auth));
+  const list = scopeEmployees(getStore(scopeId).employees, auth).map((e) => ({
+    ...e,
+    has_pin: auth.canManage ? employeeHasPin(scopeId, e.id) : undefined,
+  }));
+  return NextResponse.json(list);
 }
 
 export async function POST(req: Request) {
@@ -22,23 +28,45 @@ export async function POST(req: Request) {
   const scopeId = storeScopeFor(auth);
   await ensureStoreReady(scopeId);
 
-  let action = "sync_bitrix";
+  let body: { action?: string; employee_id?: string; only_missing?: boolean } =
+    {};
   try {
-    const body = (await req.json()) as { action?: string };
-    if (body?.action) action = body.action;
+    body = (await req.json()) as typeof body;
   } catch {
-    /* empty body ok */
+    /* empty ok */
+  }
+  const action = body.action || "sync_bitrix";
+
+  if (action === "sync_bitrix") {
+    const result = await syncEmployeesFromBitrix(scopeId);
+    return NextResponse.json({
+      ...result,
+      employees: scopeEmployees(getStore(scopeId).employees, auth).map((e) => ({
+        ...e,
+        has_pin: employeeHasPin(scopeId, e.id),
+      })),
+    });
   }
 
-  if (action !== "sync_bitrix") {
-    return NextResponse.json({ error: "unknown action" }, { status: 400 });
+  if (action === "issue_pins") {
+    const issued = issueEmployeePins(scopeId, {
+      employeeId:
+        typeof body.employee_id === "string" ? body.employee_id : undefined,
+      onlyMissing: body.only_missing !== false && !body.employee_id,
+    });
+    return NextResponse.json({
+      ok: true,
+      issued,
+      notice:
+        "Сохраните PIN сейчас — повторно они не показываются, только перевыпуск.",
+      employees: scopeEmployees(getStore(scopeId).employees, auth).map((e) => ({
+        ...e,
+        has_pin: employeeHasPin(scopeId, e.id),
+      })),
+    });
   }
 
-  const result = await syncEmployeesFromBitrix(scopeId);
-  return NextResponse.json({
-    ...result,
-    employees: scopeEmployees(getStore(scopeId).employees, auth),
-  });
+  return NextResponse.json({ error: "unknown action" }, { status: 400 });
 }
 
 export async function PATCH(req: Request) {
@@ -55,5 +83,8 @@ export async function PATCH(req: Request) {
   }
   const emp = setCollection(scopeId, body.employee_id, body.collection_enabled);
   if (!emp) return NextResponse.json({ error: "not found" }, { status: 404 });
-  return NextResponse.json(emp);
+  return NextResponse.json({
+    ...emp,
+    has_pin: employeeHasPin(scopeId, emp.id),
+  });
 }

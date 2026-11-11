@@ -11,7 +11,7 @@ import {
   scopePunches,
   scopeVisits,
 } from "@/lib/scope";
-import { ensureStoreReady } from "@/lib/store";
+import { employeeHasPin, ensureStoreReady } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +22,9 @@ export async function GET(req: Request) {
   const scopeId = storeScopeFor(auth);
   const s = await ensureStoreReady(scopeId);
   const workDate = todayDate();
-  const employees = scopeEmployees(s.employees, auth);
+  const employees = scopeEmployees(s.employees, auth).map((e) =>
+    auth.canManage ? { ...e, has_pin: employeeHasPin(scopeId, e.id) } : e,
+  );
   const visits = scopeVisits(s.visits, auth);
   const places = scopePlaces(s.places, auth);
   const days = scopeDays(s.days, auth, workDate);

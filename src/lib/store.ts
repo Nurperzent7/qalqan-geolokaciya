@@ -6,6 +6,7 @@ import {
   officeIntervals,
   staysToVisits,
 } from "./geo";
+import { generateEmployeePin, hashPin } from "./pins";
 import { DEFAULT_SETTINGS } from "./settings";
 import { todayDate } from "./calendar";
 import {
@@ -37,6 +38,8 @@ interface StoreState {
   punches: BitrixPunch[];
   cases: CaseOption[];
   caseHints: Record<string, { id: string; title: string } | null>;
+  /** scrypt hashes keyed by employee id — never return plaintext via API. */
+  pinHashes: Record<string, string>;
   viewerId: string;
 }
 
@@ -139,6 +142,7 @@ function createInitial(withDemoTracks = false): StoreState {
     punches: [],
     cases: CASE_OPTIONS,
     caseHints,
+    pinHashes: {},
     viewerId: employees[0]?.id ?? "",
   };
   recomputeAll(state);
@@ -232,6 +236,9 @@ export async function ensureStoreReady(scopeId: string): Promise<StoreState> {
         ) {
           // Strip any persisted BSSIDs — unused and sensitive.
           snap.places = snap.places.map((p) => ({ ...p, bssid_list: [] }));
+          if (!snap.pinHashes || typeof snap.pinHashes !== "object") {
+            snap.pinHashes = {};
+          }
           stores().set(scopeId, snap);
           recomputeAll(snap);
         } else {
@@ -364,6 +371,37 @@ export function setCollection(
   }
   schedulePersist(scopeId);
   return emp;
+}
+
+export function employeeHasPin(scopeId: string, employeeId: string): boolean {
+  const state = getStore(scopeId);
+  return Boolean(state.pinHashes?.[employeeId]);
+}
+
+/** Issue or rotate PINs. Returns plaintext once for the admin to copy. */
+export function issueEmployeePins(
+  scopeId: string,
+  opts?: { employeeId?: string; onlyMissing?: boolean },
+): Array<{ id: string; name: string; pin: string }> {
+  const state = getStore(scopeId);
+  if (!state.pinHashes) state.pinHashes = {};
+  const issued: Array<{ id: string; name: string; pin: string }> = [];
+  const targets = opts?.employeeId
+    ? state.employees.filter((e) => e.id === opts.employeeId)
+    : state.employees;
+
+  for (const emp of targets) {
+    if (opts?.onlyMissing && state.pinHashes[emp.id]) continue;
+    const pin = generateEmployeePin();
+    state.pinHashes[emp.id] = hashPin(pin);
+    issued.push({ id: emp.id, name: emp.name, pin });
+  }
+  if (issued.length) schedulePersist(scopeId);
+  return issued;
+}
+
+export function getPinHashes(scopeId: string): Record<string, string> {
+  return getStore(scopeId).pinHashes ?? {};
 }
 
 export function approvePlace(scopeId: string, placeId: string) {

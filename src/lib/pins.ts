@@ -15,11 +15,17 @@ export function verifyPin(pin: string, stored: string): boolean {
   return timingSafeEqual(prev, next);
 }
 
+/** Six-digit numeric PIN for employees. */
+export function generateEmployeePin(): string {
+  const n = randomBytes(4).readUInt32BE(0) % 1_000_000;
+  return String(n).padStart(6, "0");
+}
+
 function isDeployedHost(): boolean {
   return Boolean(process.env.CURSOR_APP_ID || process.env.VERCEL);
 }
 
-/** Hashes from EMPLOYEE_PIN_HASHES secret: { "e-askar": "salt:hash", ... } */
+/** Optional override from EMPLOYEE_PIN_HASHES secret. */
 export function pinHashesFromEnv(): Record<string, string> | null {
   const raw = process.env.EMPLOYEE_PIN_HASHES?.trim();
   if (!raw) return null;
@@ -39,24 +45,22 @@ export function pinHashesFromEnv(): Record<string, string> | null {
 }
 
 /**
- * Production: only env hashes. Local (no CURSOR_APP_ID/VERCEL): any 4–32 char PIN
- * for a known employee id — no plaintext credentials ship in the repo.
+ * Check PIN against store hashes first, then env secret.
+ * Local non-deployed hosts accept any 4–32 char PIN when no hash is set.
  */
 export function verifyEmployeeCredential(
   employeeId: string,
   pin: string,
+  storeHashes?: Record<string, string> | null,
 ): boolean {
   if (!pin || pin.length < 4 || pin.length > 64) return false;
-  const hashes = pinHashesFromEnv();
-  if (hashes?.[employeeId]) {
-    return verifyPin(pin, hashes[employeeId]);
-  }
-  if (!isDeployedHost()) {
-    return true;
-  }
+  const stored = storeHashes?.[employeeId] || pinHashesFromEnv()?.[employeeId];
+  if (stored) return verifyPin(pin, stored);
+  if (!isDeployedHost()) return true;
   return false;
 }
 
+/** Employee tab is always offered; login succeeds only with a issued/env PIN. */
 export function employeeLoginAvailable(): boolean {
-  return Boolean(pinHashesFromEnv()) || !isDeployedHost();
+  return true;
 }
