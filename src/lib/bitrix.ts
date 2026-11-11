@@ -14,6 +14,12 @@ export function hasBitrixWebhook(): boolean {
   return Boolean(webhookBase());
 }
 
+/**
+ * Normalize Secrets value: accept either
+ *   https://…/rest/57/token/
+ * or a method URL like
+ *   https://…/rest/57/token/profile.json
+ */
 function webhookBase(): string | null {
   const raw = process.env.BITRIX_WEBHOOK_URL?.trim().replace(/^["']|["']$/g, "");
   if (!raw) return null;
@@ -21,9 +27,9 @@ function webhookBase(): string | null {
     const u = new URL(raw);
     if (u.protocol !== "https:") return null;
     if (u.hostname.toLowerCase() !== BITRIX_PORTAL_HOST) return null;
-    // Expect …/rest/<userId>/<token> or …/rest/<userId>/<token>/
-    if (!u.pathname.includes("/rest/")) return null;
-    return `${u.origin}${u.pathname}`.replace(/\/$/, "");
+    const m = u.pathname.match(/^\/rest\/(\d+)\/([^/]+)(?:\/.*)?$/i);
+    if (!m) return null;
+    return `${u.origin}/rest/${m[1]}/${m[2]}`;
   } catch {
     return null;
   }
