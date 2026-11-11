@@ -1,4 +1,4 @@
-import { punchWorkday } from "./bitrix";
+import { fetchBitrixEmployees, hasBitrixWebhook, punchWorkday } from "./bitrix";
 import { deleteSnapshot, hasDatabase, loadSnapshot, saveSnapshot } from "./db";
 import {
   buildDaySummary,
@@ -69,7 +69,8 @@ function dayKey(employeeId: string, date = todayDate()) {
   return `${employeeId}:${date}`;
 }
 
-function liveEmployees(): Employee[] {
+function fallbackEmployees(): Employee[] {
+  // Local/dev only when Bitrix webhook is absent.
   return EMPLOYEES.map((e) => ({
     ...e,
     last_lat: null,
@@ -79,20 +80,41 @@ function liveEmployees(): Employee[] {
   }));
 }
 
-/** Empty live company state: roster + places, no fake tracks. */
+function mergeRoster(existing: Employee[], incoming: Employee[]): Employee[] {
+  const prev = new Map(existing.map((e) => [e.id, e]));
+  return incoming.map((n) => {
+    const old = prev.get(n.id);
+    if (!old) return n;
+    return {
+      ...n,
+      collection_enabled: old.collection_enabled,
+      consent_at: old.consent_at,
+      last_lat: old.last_lat,
+      last_lon: old.last_lon,
+      last_status: old.last_status,
+      last_seen_at: old.last_seen_at,
+      role: old.role === "admin" || old.role === "partner" || old.role === "deputy"
+        ? old.role
+        : n.role,
+    };
+  });
+}
+
+/** Empty live company state: places only; roster filled from Bitrix on hydrate. */
 function createInitial(withDemoTracks = false): StoreState {
   const settings = { ...DEFAULT_SETTINGS };
-  const employees = liveEmployees();
-  const places = PLACES.map((p) => ({ ...p }));
+  const useDemo = withDemoTracks && !hasBitrixWebhook();
+  const employees = useDemo ? fallbackEmployees() : [];
+  const places = PLACES.map((p) => ({ ...p, bssid_list: [] as string[] }));
   const caseHints: StoreState["caseHints"] = {};
-  const points = withDemoTracks
+  const points = useDemo
     ? [
         ...seedPointsForAskar(),
         ...seedPointsForAnn(),
         ...seedPointsForAigerim(),
       ]
     : [];
-  if (withDemoTracks) {
+  if (useDemo) {
     caseHints["stay-e-askar-20"] = {
       id: "case-55",
       title: "Дело №55 — заседание Спецсуд",
@@ -117,10 +139,44 @@ function createInitial(withDemoTracks = false): StoreState {
     punches: [],
     cases: CASE_OPTIONS,
     caseHints,
-    viewerId: "e-askar",
+    viewerId: employees[0]?.id ?? "",
   };
   recomputeAll(state);
   return state;
+}
+
+/** Pull active users from Bitrix and merge into the company store. */
+export async function syncEmployeesFromBitrix(scopeId: string): Promise<{
+  ok: boolean;
+  count: number;
+  detail?: string;
+}> {
+  const state = getStore(scopeId);
+  const fetched = await fetchBitrixEmployees();
+  if (!fetched.ok || !fetched.employees.length) {
+    if (!hasBitrixWebhook()) {
+      if (!state.employees.length) {
+        state.employees = fallbackEmployees();
+        schedulePersist(scopeId);
+      }
+      return {
+        ok: false,
+        count: state.employees.length,
+        detail: "bitrix_unavailable",
+      };
+    }
+    return {
+      ok: false,
+      count: state.employees.length,
+      detail: fetched.detail || "bitrix_unavailable",
+    };
+  }
+  state.employees = mergeRoster(state.employees, fetched.employees);
+  if (!state.viewerId && state.employees[0]) {
+    state.viewerId = state.employees[0].id;
+  }
+  schedulePersist(scopeId);
+  return { ok: true, count: state.employees.length };
 }
 
 export function getStore(scopeId: string): StoreState {
@@ -153,6 +209,10 @@ function schedulePersist(scopeId: string) {
 export async function ensureStoreReady(scopeId: string): Promise<StoreState> {
   if (!scopeId) throw new Error("store scope required");
   if (!hasDatabase()) {
+    const state = getStore(scopeId);
+    if (!state.employees.length) {
+      await syncEmployeesFromBitrix(scopeId);
+    }
     return getStore(scopeId);
   }
   const h = hydrates();
@@ -167,12 +227,20 @@ export async function ensureStoreReady(scopeId: string): Promise<StoreState> {
           Array.isArray(snap.points) &&
           snap.settings
         ) {
+          // Strip any persisted BSSIDs — unused and sensitive.
+          snap.places = snap.places.map((p) => ({ ...p, bssid_list: [] }));
           stores().set(scopeId, snap);
           recomputeAll(snap);
         } else {
           const fresh = createInitial(false);
           stores().set(scopeId, fresh);
           await saveSnapshot(snapshotKey(scopeId), fresh);
+        }
+        const st = getStore(scopeId);
+        if (hasBitrixWebhook()) {
+          await syncEmployeesFromBitrix(scopeId);
+        } else if (!st.employees.length) {
+          st.employees = fallbackEmployees();
         }
       })(),
     );
@@ -346,6 +414,17 @@ export async function syncDayToBitrix(scopeId: string, employeeId: string) {
     return { ok: false, detail: "Нет данных дня для синхронизации" };
   }
 
+  const dayPts = state.points.filter((p) => p.employee_id === employeeId);
+  if (dayPts.some((p) => p.mock)) {
+    return {
+      ok: false,
+      detail: "В дне есть симулированные точки — синхронизация в Битрикс запрещена",
+    };
+  }
+  if (!day.segments.some((s) => s.kind === "office" || s.kind === "visit")) {
+    return { ok: false, detail: "Нет офиса или визита для отметки" };
+  }
+
   const open = await punchWorkday({
     employeeBitrixId: emp.bitrix_user_id,
     type: "open",
@@ -378,9 +457,23 @@ export async function syncDayToBitrix(scopeId: string, employeeId: string) {
 export function ingestPoints(
   scopeId: string,
   batch: RawPoint[],
-  limits: { maxBatch: number; maxStore: number },
+  limits: {
+    maxBatch: number;
+    maxStore: number;
+    maxPerEmployee: number;
+  },
 ) {
-  if (batch.length > limits.maxBatch) {
+  // Drop simulated points entirely — they must not affect attendance.
+  const real = batch.filter((p) => !p.mock);
+  if (!real.length) {
+    return {
+      ok: false as const,
+      error: "mock points rejected",
+      added: 0,
+      total: getStore(scopeId).points.length,
+    };
+  }
+  if (real.length > limits.maxBatch) {
     return {
       ok: false as const,
       error: `batch too large (max ${limits.maxBatch})`,
@@ -397,19 +490,33 @@ export function ingestPoints(
       total: state.points.length,
     };
   }
-  const room = limits.maxStore - state.points.length;
+  const employeeId = real[0].employee_id;
+  const empCount = state.points.filter((p) => p.employee_id === employeeId).length;
+  if (empCount >= limits.maxPerEmployee) {
+    return {
+      ok: false as const,
+      error: "employee point quota exceeded",
+      added: 0,
+      total: state.points.length,
+    };
+  }
+  const room = Math.min(
+    limits.maxStore - state.points.length,
+    limits.maxPerEmployee - empCount,
+  );
   const key = (p: RawPoint) => `${p.device_id}|${p.ts}`;
   const existing = new Set(state.points.map(key));
   let added = 0;
-  for (const p of batch) {
+  for (const p of real) {
     if (added >= room) break;
     if (existing.has(key(p))) continue;
     if (!state.employees.some((e) => e.id === p.employee_id)) continue;
-    state.points.push(p);
+    // Never persist client wifi claims.
+    state.points.push({ ...p, wifi_bssid: null, mock: false });
     existing.add(key(p));
     added += 1;
   }
-  const touched = new Set(batch.map((p) => p.employee_id));
+  const touched = new Set(real.map((p) => p.employee_id));
   for (const id of touched) recomputeEmployee(state, id);
   if (added > 0) schedulePersist(scopeId);
   return { ok: true as const, added, total: state.points.length };

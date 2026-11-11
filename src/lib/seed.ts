@@ -88,7 +88,8 @@ export const PLACES: Place[] = [
     radius_m: 75,
     source: "manual",
     status: "approved",
-    bssid_list: ["a4:2b:b0:11:22:33", "a4:2b:b0:11:22:34"],
+    // BSSID not used server-side (client values are untrusted).
+    bssid_list: [],
   },
   {
     id: "p-court",

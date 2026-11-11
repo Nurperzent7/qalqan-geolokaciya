@@ -55,9 +55,8 @@ export function isInOffice(
   point: RawPoint,
   office: Place,
 ): boolean {
-  if (point.wifi_bssid && office.bssid_list.includes(point.wifi_bssid)) {
-    return true;
-  }
+  // Never trust client-supplied wifi_bssid — office presence is geo-only.
+  if (point.mock) return false;
   return haversineM(point.lat, point.lon, office.lat, office.lon) <= office.radius_m;
 }
 
@@ -153,7 +152,10 @@ export function officeIntervals(
   office: Place,
   settings: GeoSettings,
 ): Array<{ start: string; end: string }> {
-  const sorted = [...points].sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+  // Mock / simulated GPS must never create office intervals or Bitrix punches.
+  const sorted = points
+    .filter((p) => !p.mock)
+    .sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
   if (!sorted.length) return [];
 
   const flags = sorted.map((p) => isInOffice(p, office));

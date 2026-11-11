@@ -36,7 +36,6 @@ import {
   getAppToken,
   setAppToken,
 } from "@/lib/api-client";
-import type { LoginEmployee } from "@/lib/login-directory";
 import { cn, formatMinutes, formatTime } from "@/lib/utils";
 
 const MapPanel = dynamic(() => import("./MapPanel"), {
@@ -90,32 +89,11 @@ export default function GeoApp() {
   const [needsToken, setNeedsToken] = useState(false);
   const [loginRole, setLoginRole] = useState<"admin" | "employee">("admin");
   const [loginEmployeeId, setLoginEmployeeId] = useState("");
-  const [loginDirectory, setLoginDirectory] = useState<LoginEmployee[]>([]);
-  const [employeeLoginEnabled, setEmployeeLoginEnabled] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [selectedId, setSelectedId] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [, startTransition] = useTransition();
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        const res = await fetch("/api/auth/directory", { cache: "no-store" });
-        if (!res.ok) return;
-        const json = (await res.json()) as {
-          employee_login?: boolean;
-          employees?: LoginEmployee[];
-        };
-        const list = Array.isArray(json.employees) ? json.employees : [];
-        setEmployeeLoginEnabled(Boolean(json.employee_login));
-        setLoginDirectory(list);
-        if (list[0]) setLoginEmployeeId(list[0].id);
-      } catch {
-        /* ignore */
-      }
-    })();
-  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -166,31 +144,17 @@ export default function GeoApp() {
       const json = await res.json();
       if (!res.ok) {
         if (json.error === "employee_login_disabled") {
-          setError(
-            "Вход сотрудника выключен. Выберите «Админ» и пароль из APP_ADMIN_TOKEN.",
-          );
-        } else if (json.error === "admin_secret_missing") {
-          setError(
-            json.detail ||
-              "В Secrets нет APP_ADMIN_TOKEN. Имя должно быть точно APP_ADMIN_TOKEN.",
-          );
+          setError("Вход сотрудника недоступен. Войдите как админ.");
         } else if (json.error === "invalid credentials") {
-          setError("Неверный пароль. Проверьте APP_ADMIN_TOKEN в Secrets.");
+          setError("Неверный логин или пароль.");
         } else if (json.error === "rate_limited") {
           setError(json.detail || "Слишком много попыток, подождите.");
         } else if (json.reason === "csrf" || json.reason === "origin") {
           setError(
-            json.detail ||
-              "Браузер заблокировал вход. Обновите страницу (Ctrl+Shift+R) и войдите снова.",
+            "Браузер заблокировал вход. Обновите страницу и войдите снова.",
           );
         } else {
-          setError(
-            json.detail ||
-              (json.reason
-                ? `${json.error}: ${json.reason}`
-                : json.error) ||
-              "Неверный логин",
-          );
+          setError("Не удалось войти. Попробуйте ещё раз.");
         }
         return;
       }
@@ -317,6 +281,27 @@ export default function GeoApp() {
     }
   }
 
+  async function syncBitrixEmployees() {
+    setBusy(true);
+    try {
+      const res = await apiMutate("/api/employees", {
+        method: "POST",
+        body: { action: "sync_bitrix" },
+      });
+      const json = await res.json();
+      setToast(
+        json.ok
+          ? `Сотрудники из Битрикс: ${json.count}`
+          : json.detail === "bitrix_unavailable"
+            ? "Битрикс недоступен — проверьте вебхук"
+            : json.detail || "Не удалось загрузить сотрудников",
+      );
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (needsToken && !data) {
     return (
       <div className="flex min-h-screen items-center justify-center p-6">
@@ -328,8 +313,8 @@ export default function GeoApp() {
           <p className="brand-mark">QALQAN · геолокация</p>
           <h1 className="mt-2 font-display text-2xl text-[var(--ink)]">Вход</h1>
           <p className="mt-2 text-sm text-[var(--muted)]">
-            Админ — пароль из APP_ADMIN_TOKEN. Сотрудник — PIN из
-            EMPLOYEE_PIN_HASHES. Данные компании общие (живой режим).
+            Админ — пароль из Secrets приложения. Список сотрудников подтягивается
+            из вашего Битрикс после входа. Данные компании общие.
           </p>
           <div className="mt-4 flex gap-2">
             <button
@@ -339,33 +324,28 @@ export default function GeoApp() {
             >
               Админ
             </button>
-            {employeeLoginEnabled && (
-              <button
-                type="button"
-                className={cn(
-                  "btn-ghost flex-1",
-                  loginRole === "employee" && "tab-active",
-                )}
-                onClick={() => setLoginRole("employee")}
-              >
-                Сотрудник
-              </button>
-            )}
+            <button
+              type="button"
+              className={cn(
+                "btn-ghost flex-1",
+                loginRole === "employee" && "tab-active",
+              )}
+              onClick={() => setLoginRole("employee")}
+            >
+              Сотрудник
+            </button>
           </div>
-          {loginRole === "employee" && employeeLoginEnabled && (
+          {loginRole === "employee" && (
             <label className="mt-3 block text-sm">
-              Кто вы
-              <select
-                className="select mt-1"
+              ID сотрудника (из Битрикс, вида bx-12)
+              <input
+                className="input mt-1"
+                type="text"
+                autoComplete="username"
+                placeholder="bx-12"
                 value={loginEmployeeId}
-                onChange={(e) => setLoginEmployeeId(e.target.value)}
-              >
-                {loginDirectory.map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(e) => setLoginEmployeeId(e.target.value.trim())}
+              />
             </label>
           )}
           <input
@@ -729,7 +709,6 @@ export default function GeoApp() {
           <PhonePanel
             employeeId={selectedId}
             employeeName={selected?.name ?? selectedId}
-            places={data.places}
             collectionEnabled={Boolean(selected?.collection_enabled)}
             onSent={() => void load()}
             setToast={setToast}
@@ -744,7 +723,9 @@ export default function GeoApp() {
             onToggle={toggleCollection}
             onClear={() => void resetLive(false)}
             onLoadDemo={() => void resetLive(true)}
+            onSyncBitrix={() => void syncBitrixEmployees()}
             busy={busy}
+            bitrixLive={data.bitrix_mode === "live"}
           />
         )}
       </div>
@@ -757,25 +738,20 @@ export default function GeoApp() {
 function PhonePanel({
   employeeId,
   employeeName,
-  places,
   collectionEnabled,
   onSent,
   setToast,
 }: {
   employeeId: string;
   employeeName: string;
-  places: Place[];
   collectionEnabled: boolean;
   onSent: () => void;
   setToast: (msg: string) => void;
 }) {
   const [liveRunning, setLiveRunning] = useState(false);
-  const [simRunning, setSimRunning] = useState(false);
-  const [placeId, setPlaceId] = useState("p-office");
   const [log, setLog] = useState<string[]>([]);
   const [lastFix, setLastFix] = useState<string | null>(null);
   const watchRef = useRef<number | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const deviceId = useMemo(() => {
     if (typeof window === "undefined") return `web-${employeeId}`;
     const key = `qalqan-device-${employeeId}`;
@@ -787,14 +763,11 @@ function PhonePanel({
     return id;
   }, [employeeId]);
 
-  const place = places.find((p) => p.id === placeId) ?? places[0];
-
   useEffect(() => {
     return () => {
       if (watchRef.current != null && navigator.geolocation) {
         navigator.geolocation.clearWatch(watchRef.current);
       }
-      if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
 
@@ -802,7 +775,7 @@ function PhonePanel({
     setLog((prev) => [line, ...prev].slice(0, 16));
   }
 
-  async function sendPoint(point: Record<string, unknown>, label: string) {
+  async function sendPoint(point: Record<string, unknown>) {
     const res = await apiMutate("/api/points", {
       method: "POST",
       body: { points: [point] },
@@ -811,42 +784,42 @@ function PhonePanel({
     if (!res.ok) {
       setToast(json.error || "Ошибка отправки точки");
       stopLive();
-      stopSim();
       return false;
     }
     const t = new Date().toLocaleTimeString("ru-RU", {
       timeZone: "Asia/Qyzylorda",
     });
-    pushLog(`${t} · ${label} · +${json.added}`);
+    pushLog(`${t} · GPS · +${json.added}`);
     onSent();
     return true;
   }
 
   async function onGeoPosition(pos: GeolocationPosition) {
     const { latitude, longitude, accuracy, speed } = pos.coords;
+    const mocked = Boolean(
+      (pos.coords as GeolocationCoordinates & { mocked?: boolean }).mocked,
+    );
+    if (mocked) {
+      setToast("Симулированный GPS отклонён");
+      return;
+    }
     setLastFix(
       `${latitude.toFixed(5)}, ${longitude.toFixed(5)} ±${Math.round(accuracy)}м`,
     );
     const moving = typeof speed === "number" && speed > 0.5;
-    await sendPoint(
-      {
-        device_id: deviceId,
-        employee_id: employeeId,
-        ts: new Date(pos.timestamp).toISOString(),
-        lat: latitude,
-        lon: longitude,
-        accuracy_m: Math.min(accuracy || 50, 5000),
-        speed_mps: Math.max(speed ?? 0, 0),
-        is_moving: moving,
-        wifi_bssid: null,
-        mock: Boolean(
-          // Some browsers expose this on GeolocationCoordinates
-          (pos.coords as GeolocationCoordinates & { mocked?: boolean }).mocked,
-        ),
-        battery: 1,
-      },
-      "GPS",
-    );
+    await sendPoint({
+      device_id: deviceId,
+      employee_id: employeeId,
+      ts: new Date(pos.timestamp).toISOString(),
+      lat: latitude,
+      lon: longitude,
+      accuracy_m: Math.min(accuracy || 50, 5000),
+      speed_mps: Math.max(speed ?? 0, 0),
+      is_moving: moving,
+      wifi_bssid: null,
+      mock: false,
+      battery: 1,
+    });
   }
 
   function stopLive() {
@@ -866,7 +839,6 @@ function PhonePanel({
       setToast("Браузер не отдаёт геолокацию");
       return;
     }
-    stopSim();
     stopLive();
     setLiveRunning(true);
     watchRef.current = navigator.geolocation.watchPosition(
@@ -881,134 +853,53 @@ function PhonePanel({
     );
   }
 
-  async function pushSimOnce(atPlace: Place, moving: boolean) {
-    const jitter = () => (Math.random() - 0.5) * 0.00025;
-    await sendPoint(
-      {
-        device_id: `sim-${employeeId}`,
-        employee_id: employeeId,
-        ts: new Date().toISOString(),
-        lat: atPlace.lat + jitter(),
-        lon: atPlace.lon + jitter(),
-        accuracy_m: 12 + Math.round(Math.random() * 8),
-        speed_mps: moving ? 1.2 : 0,
-        is_moving: moving,
-        wifi_bssid:
-          atPlace.type === "office" ? atPlace.bssid_list[0] ?? null : null,
-        mock: true,
-        battery: 0.82,
-      },
-      atPlace.name,
-    );
-  }
-
-  function stopSim() {
-    if (timerRef.current) clearInterval(timerRef.current);
-    timerRef.current = null;
-    setSimRunning(false);
-  }
-
-  function startSim() {
-    if (!place) return;
-    stopLive();
-    stopSim();
-    setSimRunning(true);
-    void pushSimOnce(place, false);
-    timerRef.current = setInterval(() => {
-      const p = places.find((x) => x.id === placeId) ?? place;
-      void pushSimOnce(p, false);
-    }, 8_000);
-  }
-
   return (
     <section className="grid gap-4 lg:grid-cols-2">
-      <div className="space-y-4">
-        <div>
-          <h2 className="section-title">Живой GPS</h2>
-          <p className="section-lead">
-            Реальная геолокация браузера для {employeeName}. Точки уходят в общую
-            базу компании.
+      <div>
+        <h2 className="section-title">Живой GPS</h2>
+        <p className="section-lead">
+          Реальная геолокация браузера для {employeeName}. Точки уходят в общую
+          базу компании. Симуляция отключена.
+        </p>
+        <div className="mt-4 space-y-3 border border-[var(--line)] bg-[var(--panel)] p-4">
+          <p className="text-sm text-[var(--muted)]">
+            {collectionEnabled
+              ? "Сбор включён"
+              : "Сбор выключен — админ включает в Настройках"}
           </p>
-          <div className="mt-4 space-y-3 border border-[var(--line)] bg-[var(--panel)] p-4">
-            <p className="text-sm text-[var(--muted)]">
-              {collectionEnabled
-                ? "Сбор включён"
-                : "Сбор выключен — админ включает в Настройках"}
+          {lastFix && (
+            <p className="text-sm">
+              Последняя фиксация:{" "}
+              <span className="text-[var(--ink)]">{lastFix}</span>
             </p>
-            {lastFix && (
-              <p className="text-sm">
-                Последняя фиксация: <span className="text-[var(--ink)]">{lastFix}</span>
-              </p>
-            )}
-            <div className="flex flex-wrap gap-2">
-              {!liveRunning ? (
-                <button className="btn" type="button" onClick={startLive}>
-                  Включить GPS
-                </button>
-              ) : (
-                <button className="btn-danger" type="button" onClick={stopLive}>
-                  Остановить GPS
-                </button>
-              )}
-              <button
-                className="btn-ghost"
-                type="button"
-                onClick={() => {
-                  if (!navigator.geolocation) {
-                    setToast("Браузер не отдаёт геолокацию");
-                    return;
-                  }
-                  navigator.geolocation.getCurrentPosition(
-                    (pos) => void onGeoPosition(pos),
-                    (err) => setToast(err.message || "Нет GPS"),
-                    { enableHighAccuracy: true, timeout: 20_000 },
-                  );
-                }}
-              >
-                Одна точка сейчас
+          )}
+          <div className="flex flex-wrap gap-2">
+            {!liveRunning ? (
+              <button className="btn" type="button" onClick={startLive}>
+                Включить GPS
               </button>
-            </div>
-            <p className="text-xs text-[var(--muted)]">
-              Разрешите доступ к местоположению в браузере. На HTTPS (publish)
-              GPS работает; локально — тоже на localhost.
-            </p>
-          </div>
-        </div>
-
-        <div>
-          <h3 className="font-display text-xl">Проверка без выезда</h3>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Симулятор места (точки помечаются как mock и не копят рабочее время).
-          </p>
-          <div className="mt-3 space-y-3 border border-[var(--line)] bg-[var(--panel)] p-4">
-            <label className="block text-sm">
-              Место
-              <select
-                className="select mt-1"
-                value={placeId}
-                disabled={simRunning}
-                onChange={(e) => setPlaceId(e.target.value)}
-              >
-                {places
-                  .filter((p) => p.status === "approved")
-                  .map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <div className="flex flex-wrap gap-2">
-              {!simRunning ? (
-                <button className="btn-ghost" type="button" onClick={startSim}>
-                  Симулировать
-                </button>
-              ) : (
-                <button className="btn-danger" type="button" onClick={stopSim}>
-                  Стоп симуляции
-                </button>
-              )}
-            </div>
+            ) : (
+              <button className="btn-danger" type="button" onClick={stopLive}>
+                Остановить GPS
+              </button>
+            )}
+            <button
+              className="btn-ghost"
+              type="button"
+              onClick={() => {
+                if (!navigator.geolocation) {
+                  setToast("Браузер не отдаёт геолокацию");
+                  return;
+                }
+                navigator.geolocation.getCurrentPosition(
+                  (pos) => void onGeoPosition(pos),
+                  (err) => setToast(err.message || "Нет GPS"),
+                  { enableHighAccuracy: true, timeout: 20_000 },
+                );
+              }}
+            >
+              Одна точка сейчас
+            </button>
           </div>
         </div>
       </div>
@@ -1037,7 +928,9 @@ function SettingsPanel({
   onToggle,
   onClear,
   onLoadDemo,
+  onSyncBitrix,
   busy,
+  bitrixLive,
 }: {
   settings: GeoSettings;
   employees: Employee[];
@@ -1045,7 +938,9 @@ function SettingsPanel({
   onToggle: (id: string, enabled: boolean) => void;
   onClear: () => void;
   onLoadDemo: () => void;
+  onSyncBitrix: () => void;
   busy: boolean;
+  bitrixLive: boolean;
 }) {
   const [visitMin, setVisitMin] = useState(settings.visit_min);
   const [personalMin, setPersonalMin] = useState(settings.personal_stop_min);
@@ -1106,36 +1001,58 @@ function SettingsPanel({
         </div>
       </div>
       <div>
-        <h2 className="section-title">Сбор по сотрудникам</h2>
-        <p className="section-lead">Без согласия сбор не включается.</p>
-        <ul className="mt-4 space-y-2">
-          {employees.map((e) => (
-            <li
-              key={e.id}
-              className="flex items-center justify-between border border-[var(--line)] bg-[var(--panel)] px-3 py-3"
-            >
-              <div>
-                <p className="font-medium">{e.name}</p>
-                <p className="text-xs text-[var(--muted)]">
-                  согласие: {e.consent_at ? "есть" : "нет"}
-                </p>
-              </div>
-              <button
-                className={cn("btn-ghost", e.collection_enabled && "tab-active")}
-                onClick={() => onToggle(e.id, !e.collection_enabled)}
+        <h2 className="section-title">Сотрудники Битрикс</h2>
+        <p className="section-lead">
+          Список из портала. Без согласия сбор не включается.
+        </p>
+        <button
+          className="btn mt-3"
+          type="button"
+          disabled={busy}
+          onClick={onSyncBitrix}
+        >
+          {bitrixLive ? "Обновить из Битрикс" : "Битрикс не подключён"}
+        </button>
+        {!employees.length ? (
+          <p className="mt-4 text-sm text-[var(--muted)]">
+            Список пуст — нажмите «Обновить из Битрикс».
+          </p>
+        ) : (
+          <ul className="mt-4 space-y-2">
+            {employees.map((e) => (
+              <li
+                key={e.id}
+                className="flex items-center justify-between border border-[var(--line)] bg-[var(--panel)] px-3 py-3"
               >
-                {e.collection_enabled ? "Выключить" : "Включить"}
-              </button>
-            </li>
-          ))}
-        </ul>
+                <div>
+                  <p className="font-medium">{e.name}</p>
+                  <p className="text-xs text-[var(--muted)]">
+                    {e.id} · {e.title || "—"} · согласие:{" "}
+                    {e.consent_at ? "есть" : "нет"}
+                  </p>
+                </div>
+                <button
+                  className={cn(
+                    "btn-ghost",
+                    e.collection_enabled && "tab-active",
+                  )}
+                  onClick={() => onToggle(e.id, !e.collection_enabled)}
+                >
+                  {e.collection_enabled ? "Выключить" : "Включить"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <div className="mt-4 flex flex-wrap gap-2">
           <button className="btn-danger" onClick={onClear} disabled={busy}>
             Очистить живые данные
           </button>
-          <button className="btn-ghost" onClick={onLoadDemo} disabled={busy}>
-            Загрузить демо-треки
-          </button>
+          {!bitrixLive && (
+            <button className="btn-ghost" onClick={onLoadDemo} disabled={busy}>
+              Загрузить демо-треки
+            </button>
+          )}
         </div>
       </div>
     </section>

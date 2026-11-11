@@ -17,11 +17,14 @@ export function assertCanAccessEmployee(
 }
 
 export function publicPlace(place: Place, admin: boolean): Place {
-  if (admin) return place;
+  // Never expose BSSID lists — unused server-side and sensitive.
   return {
     ...place,
     bssid_list: [],
-    address: place.type === "office" ? "Офис (адрес скрыт)" : place.address,
+    address:
+      admin || place.type !== "office"
+        ? place.address
+        : "Офис (адрес скрыт)",
   };
 }
 

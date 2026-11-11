@@ -4,10 +4,16 @@ import { getIdentity, requireTeamRole } from "../../cursor/identity";
 import { getSession, storeScopeFromToken, type Session } from "./sessions";
 
 const CSRF_VALUE = "CursorApp";
-const MAX_POINTS_PER_BATCH = 200;
+const MAX_POINTS_PER_BATCH = 50;
 const MAX_POINTS_IN_STORE = 20_000;
+/** Cap per employee so one session cannot fill the shared company store. */
+const MAX_POINTS_PER_EMPLOYEE = 2_000;
 
-export { MAX_POINTS_PER_BATCH, MAX_POINTS_IN_STORE };
+export {
+  MAX_POINTS_PER_BATCH,
+  MAX_POINTS_IN_STORE,
+  MAX_POINTS_PER_EMPLOYEE,
+};
 
 export type AccessPrincipal = {
   email: string;

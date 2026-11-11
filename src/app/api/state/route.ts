@@ -59,7 +59,7 @@ export async function GET(req: Request) {
     cases,
     viewer_id: auth.employeeId ?? s.viewerId,
     sample_notice: hasBitrixWebhook()
-      ? "Живой режим: общая база компании, отметки в Битрикс через вебхук."
-      : "Живой режим: общая база компании. Задайте BITRIX_WEBHOOK_URL для live-отметок в Битрикс.",
+      ? "Живой режим: сотрудники из Битрикс, GPS и отметки timeman через вебхук."
+      : "Живой режим без вебхука: задайте BITRIX_WEBHOOK_URL, чтобы подтянуть сотрудников и отметки.",
   });
 }

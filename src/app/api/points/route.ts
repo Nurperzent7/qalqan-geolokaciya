@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   MAX_POINTS_IN_STORE,
   MAX_POINTS_PER_BATCH,
+  MAX_POINTS_PER_EMPLOYEE,
   requireCsrf,
   requireViewer,
   storeScopeFor,
@@ -19,7 +20,7 @@ export async function POST(req: Request) {
   const viewer = await requireViewer(req);
   if (viewer instanceof NextResponse) return viewer;
 
-  const limited = await rateLimit(`points:${viewer.email}`, 30, 60_000);
+  const limited = await rateLimit(`points:${viewer.email}`, 20, 60_000);
   if (!limited.ok) {
     return NextResponse.json(
       { error: "rate_limited", retry_after: limited.retryAfterSec },
@@ -109,6 +110,7 @@ export async function POST(req: Request) {
     if (raw.employee_id !== employeeId) continue;
     if (!Number.isFinite(raw.lat) || !Number.isFinite(raw.lon)) continue;
     if (Math.abs(raw.lat) > 90 || Math.abs(raw.lon) > 180) continue;
+    if (raw.mock) continue;
     cleaned.push({
       device_id: raw.device_id.slice(0, 64),
       employee_id: employeeId,
@@ -118,16 +120,23 @@ export async function POST(req: Request) {
       accuracy_m: Math.min(Math.max(Number(raw.accuracy_m) || 0, 0), 5000),
       speed_mps: Math.min(Math.max(Number(raw.speed_mps) || 0, 0), 100),
       is_moving: Boolean(raw.is_moving),
-      wifi_bssid:
-        typeof raw.wifi_bssid === "string" ? raw.wifi_bssid.slice(0, 32) : null,
-      mock: Boolean(raw.mock),
+      wifi_bssid: null,
+      mock: false,
       battery: Math.min(Math.max(Number(raw.battery) || 0, 0), 1),
     });
+  }
+
+  if (!cleaned.length) {
+    return NextResponse.json(
+      { error: "no valid points", added: 0 },
+      { status: 400 },
+    );
   }
 
   const result = ingestPoints(scopeId, cleaned, {
     maxBatch: MAX_POINTS_PER_BATCH,
     maxStore: MAX_POINTS_IN_STORE,
+    maxPerEmployee: MAX_POINTS_PER_EMPLOYEE,
   });
 
   if (!result.ok) {

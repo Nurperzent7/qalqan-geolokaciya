@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
-import { requireCsrf, rateLimitKey } from "@/lib/api-guard";
-import { loginEmployeeName } from "@/lib/login-directory";
+import { requireCsrf, rateLimitKey, storeScopeFor } from "@/lib/api-guard";
 import {
   employeeLoginAvailable,
   verifyEmployeeCredential,
 } from "@/lib/pins";
 import { rateLimit } from "@/lib/rate-limit";
 import { adminSecretsMatch, createSession } from "@/lib/sessions";
+import { ensureStoreReady, getStore } from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,23 +48,28 @@ export async function POST(req: Request) {
   if (body.role === "admin") {
     const match = adminSecretsMatch(password);
     if (!match.ok) {
-      if (match.missing) {
-        return NextResponse.json(
-          {
-            error: "admin_secret_missing",
-            detail:
-              "Секрет APP_ADMIN_TOKEN не задан (проверьте имя: TOKEN, не TOKEM).",
-          },
-          { status: 401 },
-        );
-      }
-      return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
+      return NextResponse.json(
+        { error: "invalid credentials" },
+        { status: 401 },
+      );
     }
     const { token, session } = await createSession({
       role: "admin",
       employeeId: null,
       name: match.simulated ? "Local Admin" : "Admin",
     });
+    // Warm company store + Bitrix roster for the new admin session.
+    const principal = {
+      email: "admin@app",
+      name: session.name,
+      simulated: false,
+      stage: "production" as const,
+      canManage: true,
+      employeeId: null,
+      source: "session" as const,
+      sessionId: session.id,
+    };
+    await ensureStoreReady(storeScopeFor(principal)).catch(() => null);
     return NextResponse.json({
       token,
       role: session.role,
@@ -76,29 +81,44 @@ export async function POST(req: Request) {
   if (body.role === "employee") {
     if (!employeeLoginAvailable()) {
       return NextResponse.json(
-        {
-          error: "employee_login_disabled",
-          detail:
-            "Вход сотрудников выключен: задайте секрет EMPLOYEE_PIN_HASHES или войдите как админ.",
-        },
+        { error: "employee_login_disabled" },
         { status: 403 },
       );
     }
     const employeeId =
       typeof body.employee_id === "string" ? body.employee_id.slice(0, 64) : "";
-    const name = loginEmployeeName(employeeId);
-    if (!name || !verifyEmployeeCredential(employeeId, password)) {
+    if (!employeeId || !verifyEmployeeCredential(employeeId, password)) {
       return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
     }
+
+    // Resolve name from company roster (Bitrix) — never from a public directory.
+    const warm = {
+      email: `${employeeId}@employee`,
+      name: employeeId,
+      simulated: false,
+      stage: "production" as const,
+      canManage: false,
+      employeeId,
+      source: "session" as const,
+      sessionId: null,
+    };
+    await ensureStoreReady(storeScopeFor(warm)).catch(() => null);
+    const emp = getStore(storeScopeFor(warm)).employees.find(
+      (e) => e.id === employeeId,
+    );
+    if (!emp) {
+      return NextResponse.json({ error: "invalid credentials" }, { status: 401 });
+    }
+
     const { token, session } = await createSession({
       role: "employee",
-      employeeId,
-      name,
+      employeeId: emp.id,
+      name: emp.name,
     });
     return NextResponse.json({
       token,
       role: session.role,
-      employee_id: employeeId,
+      employee_id: emp.id,
       name: session.name,
     });
   }

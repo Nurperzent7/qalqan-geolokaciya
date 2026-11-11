@@ -1,13 +1,112 @@
 /**
- * Bitrix24 timeman client.
- * Uses incoming webhook when BITRIX_WEBHOOK_URL is set; otherwise mock punches.
- * Replaces Clockster attendance write path from the IT instruction.
+ * Bitrix24 client: timeman punches + employee roster via incoming webhook.
  */
 
-import type { BitrixPunch } from "./types";
+import type { BitrixPunch, Employee, Role } from "./types";
 
 export function hasBitrixWebhook(): boolean {
   return Boolean(process.env.BITRIX_WEBHOOK_URL?.trim());
+}
+
+function webhookBase(): string | null {
+  const raw = process.env.BITRIX_WEBHOOK_URL?.trim();
+  if (!raw) return null;
+  return raw.replace(/\/$/, "");
+}
+
+async function bitrixCall<T>(
+  method: string,
+  body: Record<string, unknown> = {},
+): Promise<{ ok: true; result: T } | { ok: false; status: number }> {
+  const base = webhookBase();
+  if (!base) return { ok: false, status: 0 };
+  try {
+    const res = await fetch(`${base}/${method}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      await res.text().catch(() => "");
+      return { ok: false, status: res.status };
+    }
+    const json = (await res.json()) as { result?: T; error?: string };
+    if (json.error || json.result === undefined) {
+      return { ok: false, status: 502 };
+    }
+    return { ok: true, result: json.result };
+  } catch {
+    return { ok: false, status: 0 };
+  }
+}
+
+type BitrixUser = {
+  ID: string;
+  NAME?: string;
+  LAST_NAME?: string;
+  SECOND_NAME?: string;
+  WORK_POSITION?: string;
+  ACTIVE?: boolean | string;
+  UF_DEPARTMENT?: number[];
+};
+
+function mapBitrixUser(u: BitrixUser): Employee | null {
+  const idNum = Number(u.ID);
+  if (!Number.isFinite(idNum) || idNum <= 0) return null;
+  const active = u.ACTIVE === true || u.ACTIVE === "Y" || u.ACTIVE === undefined;
+  if (!active) return null;
+  const name = [u.NAME, u.LAST_NAME].filter(Boolean).join(" ").trim() || `User ${idNum}`;
+  return {
+    id: `bx-${idNum}`,
+    name,
+    title: (u.WORK_POSITION || "").trim() || "сотрудник",
+    practice: "",
+    bitrix_user_id: idNum,
+    role: "employee" as Role,
+    collection_enabled: false,
+    consent_at: null,
+    last_lat: null,
+    last_lon: null,
+    last_status: "Сбор выключен",
+    last_seen_at: null,
+  };
+}
+
+/** Active Bitrix users → employee roster. Empty if webhook missing/fails. */
+export async function fetchBitrixEmployees(): Promise<{
+  ok: boolean;
+  employees: Employee[];
+  detail?: string;
+}> {
+  if (!webhookBase()) {
+    return { ok: false, employees: [], detail: "webhook_missing" };
+  }
+
+  const all: Employee[] = [];
+  let start = 0;
+  for (let page = 0; page < 20; page += 1) {
+    const res = await bitrixCall<BitrixUser[]>("user.get", {
+      FILTER: { ACTIVE: true },
+      ADMIN_MODE: true,
+      start,
+    });
+    if (!res.ok) {
+      return {
+        ok: false,
+        employees: all,
+        detail: `user.get ${res.status || "failed"}`,
+      };
+    }
+    const batch = Array.isArray(res.result) ? res.result : [];
+    for (const u of batch) {
+      const emp = mapBitrixUser(u);
+      if (emp) all.push(emp);
+    }
+    if (batch.length < 50) break;
+    start += batch.length;
+  }
+
+  return { ok: true, employees: all };
 }
 
 export async function punchWorkday(params: {
@@ -16,7 +115,12 @@ export async function punchWorkday(params: {
   at: string;
   employeeId: string;
   note: string;
-}): Promise<{ ok: boolean; mode: "live" | "mock"; punch: BitrixPunch; detail?: string }> {
+}): Promise<{
+  ok: boolean;
+  mode: "live" | "mock";
+  punch: BitrixPunch;
+  detail?: string;
+}> {
   const punch: BitrixPunch = {
     id: `punch-${params.employeeId}-${params.type}-${Date.parse(params.at)}`,
     employee_id: params.employeeId,
@@ -26,12 +130,15 @@ export async function punchWorkday(params: {
     note: params.note,
   };
 
-  const base = process.env.BITRIX_WEBHOOK_URL?.replace(/\/$/, "");
-  if (!base) {
-    return { ok: true, mode: "mock", punch, detail: "BITRIX_WEBHOOK_URL не задан — демо-режим" };
+  if (!webhookBase()) {
+    return {
+      ok: true,
+      mode: "mock",
+      punch,
+      detail: "Битрикс не подключён — демо-режим",
+    };
   }
 
-  // timeman.open / timeman.close via REST webhook
   const method =
     params.type === "open"
       ? "timeman.open"
@@ -41,33 +148,17 @@ export async function punchWorkday(params: {
           ? "timeman.pause"
           : "timeman.open";
 
-  try {
-    const url = `${base}/${method}`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        USER_ID: params.employeeBitrixId,
-        TIME: params.at,
-      }),
-    });
-    if (!res.ok) {
-      // Do not forward upstream body — may leak portal internals.
-      await res.text().catch(() => "");
-      return {
-        ok: false,
-        mode: "live",
-        punch,
-        detail: `Bitrix HTTP ${res.status}`,
-      };
-    }
-    return { ok: true, mode: "live", punch };
-  } catch {
+  const res = await bitrixCall<unknown>(method, {
+    USER_ID: params.employeeBitrixId,
+    TIME: params.at,
+  });
+  if (!res.ok) {
     return {
       ok: false,
       mode: "live",
       punch,
-      detail: "Bitrix request failed",
+      detail: res.status ? `Bitrix HTTP ${res.status}` : "Bitrix request failed",
     };
   }
+  return { ok: true, mode: "live", punch };
 }
