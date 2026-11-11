@@ -31,10 +31,14 @@ Dev-сервер: `http://127.0.0.1:3847`
 
 ## Мобильное приложение (фон GPS)
 
-Сотрудникам — Capacitor APK/IPA: трек идёт при свёрнутом приложении.
+Сотрудникам — Capacitor **Android + iOS**: трек идёт при свёрнутом приложении.
 
 ```bash
-cd mobile && npm install && npx cap add android && npx cap sync android && npx cap open android
+# Android
+cd mobile && npm install && npx cap sync android && npx cap open android
+
+# iOS (только на Mac с Xcode)
+cd mobile && npm install && npx cap sync ios && npx cap open ios
 ```
 
 Подробности: [`mobile/README.md`](./mobile/README.md).

@@ -1,11 +1,16 @@
 node_modules/
-ios/
 android/.gradle/
 android/build/
 android/app/build/
 android/captures/
 android/local.properties
+ios/App/Pods/
+ios/App/App/public/
+ios/DerivedData/
+ios/**/xcuserdata/
 .DS_Store
 *.log
 *.apk
 *.aab
+*.ipa
+*.xcarchive
