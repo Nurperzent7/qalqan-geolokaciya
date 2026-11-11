@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Manrope, Source_Serif_4 } from "next/font/google";
 import "./globals.css";
 
@@ -16,6 +16,21 @@ export const metadata: Metadata = {
   title: "QALQAN · Геолокация",
   description:
     "Модуль геолокации и учёта визитов для Битрикс24 без Clockster: карта, журнал дня, справочник мест.",
+  appleWebApp: {
+    capable: true,
+    title: "QALQAN",
+    statusBarStyle: "default",
+  },
+  formatDetection: {
+    telephone: false,
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#1f4b3a",
 };
 
 export default function RootLayout({

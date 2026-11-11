@@ -59,11 +59,12 @@ export async function startNativeBackgroundGeo(
   const id = await BackgroundGeolocation.addWatcher(
     {
       backgroundMessage:
-        "QALQAN собирает геолокацию для учёта рабочего дня. Остановите в приложении, чтобы выключить.",
-      backgroundTitle: "QALQAN · геолокация",
+        "Идёт учёт рабочего дня. Остановите GPS в приложении QALQAN, чтобы выключить.",
+      backgroundTitle: "QALQAN · GPS",
       requestPermissions: true,
       stale: false,
-      distanceFilter: 40,
+      // Slightly denser than walking stride — better street/office transitions.
+      distanceFilter: 25,
     },
     (location, error) => {
       if (error) {

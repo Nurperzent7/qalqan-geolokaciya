@@ -19,6 +19,7 @@
 html,
 body {
   min-height: 100%;
+  min-height: 100dvh;
 }
 
 body {
@@ -28,6 +29,60 @@ body {
     radial-gradient(circle at 88% 0%, rgba(196, 163, 90, 0.16), transparent 32%),
     linear-gradient(160deg, var(--bg1), var(--bg0));
   font-family: var(--font-body), system-ui, sans-serif;
+  padding:
+    env(safe-area-inset-top, 0px)
+    env(safe-area-inset-right, 0px)
+    0
+    env(safe-area-inset-left, 0px);
+}
+
+/* Capacitor / phone shell */
+.app-mobile {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-mobile-main {
+  flex: 1;
+  padding-bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px));
+}
+
+.mobile-bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.15rem;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-strong) 92%, #ebe4d6);
+  padding: 0.35rem 0.35rem calc(0.35rem + env(safe-area-inset-bottom, 0px));
+  backdrop-filter: blur(10px);
+}
+
+.mobile-nav-btn {
+  @apply flex flex-col items-center justify-center gap-0.5 px-1 py-2 text-[10px] text-[var(--muted)] transition;
+  min-height: 3.25rem;
+}
+
+.mobile-nav-btn-active {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+}
+
+.mobile-status-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.mobile-status-dot-live {
+  background: var(--ok);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 22%, transparent);
 }
 
 .brand-mark {
@@ -128,6 +183,14 @@ body {
   padding: 0.75rem 1rem;
   box-shadow: var(--shadow);
   animation: rise 0.35s ease-out;
+  white-space: pre-wrap;
+}
+
+.toast-mobile {
+  left: 0.75rem;
+  right: 0.75rem;
+  bottom: calc(4.75rem + env(safe-area-inset-bottom, 0px));
+  max-width: none;
 }
 
 @keyframes rise {

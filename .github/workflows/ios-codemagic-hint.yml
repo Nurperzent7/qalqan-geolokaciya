@@ -1,0 +1,21 @@
+# Reminder workflow: iOS cannot be compiled on Windows runners.
+# Real IPA builds run on Codemagic (codemagic.yaml) or a macOS self-hosted runner.
+name: iOS build reminder
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "mobile/ios/**"
+      - "mobile/capacitor.config.ts"
+      - "codemagic.yaml"
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Windows / Linux cannot build iOS
+        run: |
+          echo "::notice title=iOS without Mac::Use Codemagic (codemagic.yaml) or a macOS cloud. See mobile/IOS-WITHOUT-MAC.md"
+          echo "Bundle ID: kz.qalqan.geolokaciya"
+          echo "Local Windows path: build Android APK; for iPhone use TestFlight via Codemagic."

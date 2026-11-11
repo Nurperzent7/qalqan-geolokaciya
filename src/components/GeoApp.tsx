@@ -36,6 +36,11 @@ import {
   getAppToken,
   setAppToken,
 } from "@/lib/api-client";
+import {
+  EMPLOYEE_MOBILE_TABS,
+  isNarrowViewport,
+  preferEmployeeMobileShell,
+} from "@/lib/mobile";
 import { cn, formatMinutes, formatTime } from "@/lib/utils";
 
 const MapPanel = dynamic(() => import("./MapPanel"), {
@@ -95,7 +100,24 @@ export default function GeoApp() {
   const [selectedId, setSelectedId] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [nativeApp, setNativeApp] = useState(false);
+  const [narrow, setNarrow] = useState(false);
+  const [gpsLive, setGpsLive] = useState(false);
+  const mobileBootstrapped = useRef(false);
   const [, startTransition] = useTransition();
+
+  useEffect(() => {
+    void import("@/lib/native-geo").then((m) =>
+      m.isNativeApp().then((native) => {
+        setNativeApp(native);
+        if (native) setLoginRole("employee");
+      }),
+    );
+    const syncNarrow = () => setNarrow(isNarrowViewport());
+    syncNarrow();
+    window.addEventListener("resize", syncNarrow);
+    return () => window.removeEventListener("resize", syncNarrow);
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -127,6 +149,19 @@ export default function GeoApp() {
     }, 30_000);
     return () => clearInterval(t);
   }, [load]);
+
+  useEffect(() => {
+    if (!data || mobileBootstrapped.current) return;
+    const employeeShell = preferEmployeeMobileShell({
+      isAdmin: data.viewer.can_manage,
+      nativeApp,
+      narrow,
+    });
+    if (employeeShell) {
+      setTab("phone");
+      mobileBootstrapped.current = true;
+    }
+  }, [data, nativeApp, narrow]);
 
   async function submitLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -339,44 +374,54 @@ export default function GeoApp() {
 
   if (needsToken && !data) {
     return (
-      <div className="flex min-h-screen items-center justify-center p-6">
+      <div className="flex min-h-[100dvh] items-center justify-center p-4 sm:p-6">
         <form
           onSubmit={(e) => void submitLogin(e)}
-          className="w-full max-w-md border border-[var(--line)] bg-[var(--panel)] p-6 shadow-[var(--shadow)]"
+          className="w-full max-w-md border border-[var(--line)] bg-[var(--panel)] p-5 shadow-[var(--shadow)] sm:p-6"
         >
           <ShieldAlert className="mb-3 h-8 w-8 text-[var(--accent)]" />
           <p className="brand-mark">QALQAN · геолокация</p>
-          <h1 className="mt-2 font-display text-2xl text-[var(--ink)]">Вход</h1>
+          <h1 className="mt-2 font-display text-2xl text-[var(--ink)]">
+            {nativeApp ? "Вход сотрудника" : "Вход"}
+          </h1>
           <p className="mt-2 text-sm text-[var(--muted)]">
-            Админ — пароль из Secrets. Сотрудник — ID вида bx-21 и длинный
-            пароль (12+ символов), который выдаёт админ в Настройках.
+            {nativeApp
+              ? "Введите ID из Битрикс (bx-…) и длинный пароль, который выдал админ."
+              : "Админ — пароль из Secrets. Сотрудник — ID вида bx-21 и длинный пароль (12+ символов), который выдаёт админ в Настройках."}
           </p>
-          <div className="mt-4 flex gap-2">
-            <button
-              type="button"
-              className={cn("btn-ghost flex-1", loginRole === "admin" && "tab-active")}
-              onClick={() => setLoginRole("admin")}
-            >
-              Админ
-            </button>
-            <button
-              type="button"
-              className={cn(
-                "btn-ghost flex-1",
-                loginRole === "employee" && "tab-active",
-              )}
-              onClick={() => setLoginRole("employee")}
-            >
-              Сотрудник
-            </button>
-          </div>
-          {loginRole === "employee" && (
+          {!nativeApp && (
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                className={cn(
+                  "btn-ghost flex-1",
+                  loginRole === "admin" && "tab-active",
+                )}
+                onClick={() => setLoginRole("admin")}
+              >
+                Админ
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  "btn-ghost flex-1",
+                  loginRole === "employee" && "tab-active",
+                )}
+                onClick={() => setLoginRole("employee")}
+              >
+                Сотрудник
+              </button>
+            </div>
+          )}
+          {(loginRole === "employee" || nativeApp) && (
             <label className="mt-3 block text-sm">
               ID сотрудника (из Битрикс, вида bx-12)
               <input
                 className="input mt-1"
                 type="text"
                 autoComplete="username"
+                inputMode="text"
+                enterKeyHint="next"
                 placeholder="bx-12"
                 value={loginEmployeeId}
                 onChange={(e) => setLoginEmployeeId(e.target.value.trim())}
@@ -387,14 +432,21 @@ export default function GeoApp() {
             className="input mt-3"
             type="password"
             autoComplete="current-password"
+            enterKeyHint="go"
             placeholder={
-              loginRole === "admin" ? "Пароль админа" : "Пароль сотрудника"
+              loginRole === "admin" && !nativeApp
+                ? "Пароль админа"
+                : "Пароль сотрудника"
             }
             value={tokenInput}
             onChange={(e) => setTokenInput(e.target.value)}
           />
           {error && <p className="mt-2 text-sm text-[var(--danger)]">{error}</p>}
-          <button className="btn mt-4 w-full" type="submit" disabled={busy}>
+          <button
+            className="btn mt-4 w-full py-3 text-base"
+            type="submit"
+            disabled={busy}
+          >
             Войти
           </button>
         </form>
@@ -426,100 +478,203 @@ export default function GeoApp() {
 
   const selected = data.employees.find((e) => e.id === selectedId);
   const isAdmin = data.viewer.can_manage;
+  const mobileShell = preferEmployeeMobileShell({
+    isAdmin,
+    nativeApp,
+    narrow,
+  });
   const visibleTabs = TABS.filter((t) => {
     if (t.id === "settings" || t.id === "places") return isAdmin;
+    if (mobileShell) {
+      return (EMPLOYEE_MOBILE_TABS as readonly string[]).includes(t.id);
+    }
     return true;
   });
+  const mobileNavTabs = TABS.filter((t) =>
+    (EMPLOYEE_MOBILE_TABS as readonly string[]).includes(t.id),
+  );
+
+  const dayLabel = data.work_date || data.demo_date;
 
   return (
-    <div className="min-h-screen">
+    <div className={cn(mobileShell ? "app-mobile" : "min-h-screen")}>
       <header className="relative overflow-hidden border-b border-[var(--line)]">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(196,163,90,0.18),transparent_55%),radial-gradient(ellipse_at_bottom_left,rgba(31,75,58,0.22),transparent_50%)]" />
-        <div className="relative mx-auto flex max-w-7xl flex-col gap-4 px-4 py-5 sm:px-6 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="brand-mark">QALQAN · геолокация</p>
-            <h1 className="mt-1 font-display text-3xl tracking-tight text-[var(--ink)] sm:text-4xl">
-              Учёт визитов без Clockster
-            </h1>
-            <p className="mt-2 max-w-2xl text-sm text-[var(--muted)] sm:text-base">
-              Точки с телефона → офис / визиты / чистое время. Отметки прихода и ухода
-              пишутся в Битрикс24 (рабочий день), 2ГИС только для справочника мест.
-            </p>
+        {mobileShell ? (
+          <div className="relative mx-auto flex max-w-7xl items-start justify-between gap-3 px-4 py-3">
+            <div className="min-w-0">
+              <p className="brand-mark">QALQAN</p>
+              <h1 className="mt-0.5 truncate font-display text-xl text-[var(--ink)]">
+                {selected?.name || data.viewer.name}
+              </h1>
+              <p className="mt-1 text-xs text-[var(--muted)]">
+                {dayLabel}
+                {selected?.last_status ? ` · ${selected.last_status}` : ""}
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-col items-end gap-2">
+              <span className="chip inline-flex items-center gap-1.5">
+                <span
+                  className={cn(
+                    "mobile-status-dot",
+                    gpsLive && "mobile-status-dot-live",
+                  )}
+                />
+                {gpsLive ? "GPS фон" : nativeApp ? "приложение" : "телефон"}
+              </span>
+              <div className="flex gap-1">
+                <button
+                  className="btn-ghost px-2 py-1.5"
+                  type="button"
+                  onClick={() => void load()}
+                  disabled={busy}
+                  aria-label="Обновить"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                </button>
+                <button
+                  className="btn-ghost px-2 py-1.5 text-xs"
+                  type="button"
+                  onClick={() => void logout()}
+                >
+                  Выйти
+                </button>
+              </div>
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="chip">
-              {isAdmin ? "Роль: админ" : `Роль: ${data.viewer.name}`}
-            </span>
-            <span className="chip">
-              {data.bitrix_mode === "mock"
-                ? "Битрикс: нет вебхука"
-                : `Битрикс: ${data.bitrix_host || "live"}`}
-            </span>
-            <span className="chip">Режим: живой</span>
-            <span className="chip">
-              {data.persistence === "postgres" ? "БД: Postgres" : "БД: память"}
-            </span>
-            <span className="chip">День {data.work_date || data.demo_date}</span>
-            <button className="btn-ghost" onClick={() => void load()} disabled={busy}>
-              <RefreshCw className="h-4 w-4" /> Обновить
-            </button>
-            <button className="btn" onClick={() => void syncBitrix()} disabled={busy}>
-              <Send className="h-4 w-4" /> В Битрикс
-            </button>
-            <button className="btn-ghost" type="button" onClick={() => void logout()}>
-              Выйти
-            </button>
+        ) : (
+          <div className="relative mx-auto flex max-w-7xl flex-col gap-4 px-4 py-5 sm:px-6 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="brand-mark">QALQAN · геолокация</p>
+              <h1 className="mt-1 font-display text-3xl tracking-tight text-[var(--ink)] sm:text-4xl">
+                Учёт визитов без Clockster
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm text-[var(--muted)] sm:text-base">
+                Точки с телефона → офис / визиты / чистое время. Отметки прихода и ухода
+                пишутся в Битрикс24 (рабочий день), 2ГИС только для справочника мест.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="chip">
+                {isAdmin ? "Роль: админ" : `Роль: ${data.viewer.name}`}
+              </span>
+              <span className="chip">
+                {data.bitrix_mode === "mock"
+                  ? "Битрикс: нет вебхука"
+                  : `Битрикс: ${data.bitrix_host || "live"}`}
+              </span>
+              <span className="chip">Режим: живой</span>
+              <span className="chip">
+                {data.persistence === "postgres" ? "БД: Postgres" : "БД: память"}
+              </span>
+              <span className="chip">День {dayLabel}</span>
+              <button className="btn-ghost" onClick={() => void load()} disabled={busy}>
+                <RefreshCw className="h-4 w-4" /> Обновить
+              </button>
+              <button className="btn" onClick={() => void syncBitrix()} disabled={busy}>
+                <Send className="h-4 w-4" /> В Битрикс
+              </button>
+              <button className="btn-ghost" type="button" onClick={() => void logout()}>
+                Выйти
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </header>
 
-      <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6">
-        <div className="mb-4 rounded-lg border border-dashed border-[var(--line)] bg-[var(--panel)]/70 px-3 py-2 text-xs text-[var(--muted)] sm:text-sm">
-          {data.sample_notice}
-        </div>
+      <div
+        className={cn(
+          "mx-auto max-w-7xl px-4 py-4 sm:px-6",
+          mobileShell && "app-mobile-main",
+        )}
+      >
+        {!mobileShell && (
+          <div className="mb-4 rounded-lg border border-dashed border-[var(--line)] bg-[var(--panel)]/70 px-3 py-2 text-xs text-[var(--muted)] sm:text-sm">
+            {data.sample_notice}
+          </div>
+        )}
 
-        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <nav className="flex gap-1 overflow-x-auto pb-1">
-            {visibleTabs.map((t) => {
-              const Icon = t.icon;
-              return (
-                <button
-                  key={t.id}
-                  className={cn("tab", tab === t.id && "tab-active")}
-                  onClick={() => setTab(t.id)}
+        {!mobileShell && (
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <nav className="flex gap-1 overflow-x-auto pb-1">
+              {visibleTabs.map((t) => {
+                const Icon = t.icon;
+                return (
+                  <button
+                    key={t.id}
+                    className={cn("tab", tab === t.id && "tab-active")}
+                    onClick={() => setTab(t.id)}
+                  >
+                    <Icon className="h-4 w-4" />
+                    {t.label}
+                  </button>
+                );
+              })}
+            </nav>
+            {isAdmin ? (
+              <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
+                Сотрудник
+                <select
+                  className="select"
+                  value={selectedId}
+                  onChange={(e) => setSelectedId(e.target.value)}
                 >
-                  <Icon className="h-4 w-4" />
-                  {t.label}
-                </button>
-              );
-            })}
-          </nav>
-          {isAdmin ? (
-            <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
-              Сотрудник
-              <select
-                className="select"
-                value={selectedId}
-                onChange={(e) => setSelectedId(e.target.value)}
-              >
-                {data.employees.map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : (
-            <span className="text-sm text-[var(--muted)]">{selected?.name}</span>
-          )}
-        </div>
+                  {data.employees.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <span className="text-sm text-[var(--muted)]">{selected?.name}</span>
+            )}
+          </div>
+        )}
+
+        {mobileShell && tab === "journal" && day && (
+          <div className="mb-4 grid grid-cols-3 gap-2">
+            <div className="border border-[var(--line)] bg-[var(--panel)] px-2 py-3 text-center">
+              <p className="text-[10px] uppercase tracking-wide text-[var(--muted)]">
+                Приход
+              </p>
+              <p className="mt-1 text-sm font-medium">{formatTime(day.first_in)}</p>
+            </div>
+            <div className="border border-[var(--line)] bg-[var(--panel)] px-2 py-3 text-center">
+              <p className="text-[10px] uppercase tracking-wide text-[var(--muted)]">
+                Уход
+              </p>
+              <p className="mt-1 text-sm font-medium">{formatTime(day.last_out)}</p>
+            </div>
+            <div className="border border-[var(--line)] bg-[var(--panel)] px-2 py-3 text-center">
+              <p className="text-[10px] uppercase tracking-wide text-[var(--muted)]">
+                Чистое
+              </p>
+              <p className="mt-1 text-sm font-medium">
+                {formatMinutes(day.net_minutes ?? 0)}
+              </p>
+            </div>
+          </div>
+        )}
 
         {tab === "map" && (
           <section className="grid gap-4 lg:grid-cols-[1.4fr_0.8fr]">
-            <div className="map-shell h-[420px] overflow-hidden sm:h-[560px]">
-              <MapPanel employees={data.employees} places={data.places} />
+            <div
+              className={cn(
+                "map-shell overflow-hidden",
+                mobileShell ? "h-[52vh] min-h-[280px]" : "h-[420px] sm:h-[560px]",
+              )}
+            >
+              <MapPanel
+                employees={
+                  mobileShell
+                    ? data.employees.filter((e) => e.id === selectedId)
+                    : data.employees
+                }
+                places={data.places}
+              />
             </div>
-            <aside className="space-y-3">
+            <aside className={cn("space-y-3", mobileShell && "hidden sm:block")}>
               <h2 className="section-title">Сейчас на карте</h2>
               <p className="section-lead">
                 Статус обновляется пачками (~каждые {data.settings.draft_refresh_min} мин), не
@@ -611,7 +766,7 @@ export default function GeoApp() {
                   ))}
                 </dl>
                 <button
-                  className="btn mt-4 w-full"
+                  className={cn("btn mt-4 w-full", mobileShell && "py-3 text-base")}
                   disabled={busy || !day}
                   onClick={() => void syncBitrix()}
                 >
@@ -749,7 +904,9 @@ export default function GeoApp() {
             employeeId={selectedId}
             employeeName={selected?.name ?? selectedId}
             collectionEnabled={Boolean(selected?.collection_enabled)}
+            compact={mobileShell}
             onSent={() => void load()}
+            onLiveChange={setGpsLive}
             setToast={setToast}
           />
         )}
@@ -770,7 +927,39 @@ export default function GeoApp() {
         )}
       </div>
 
-      {toast && <div className="toast">{toast}</div>}
+      {mobileShell && (
+        <nav className="mobile-bottom-nav" aria-label="Навигация сотрудника">
+          {mobileNavTabs.map((t) => {
+            const Icon = t.icon;
+            const short =
+              t.id === "phone"
+                ? "GPS"
+                : t.id === "journal"
+                  ? "День"
+                  : t.id === "visits"
+                    ? "Визиты"
+                    : "Карта";
+            return (
+              <button
+                key={t.id}
+                type="button"
+                className={cn(
+                  "mobile-nav-btn",
+                  tab === t.id && "mobile-nav-btn-active",
+                )}
+                onClick={() => setTab(t.id)}
+              >
+                <Icon className="h-5 w-5" />
+                {short}
+              </button>
+            );
+          })}
+        </nav>
+      )}
+
+      {toast && (
+        <div className={cn("toast", mobileShell && "toast-mobile")}>{toast}</div>
+      )}
     </div>
   );
 }
@@ -779,13 +968,17 @@ function PhonePanel({
   employeeId,
   employeeName,
   collectionEnabled,
+  compact = false,
   onSent,
+  onLiveChange,
   setToast,
 }: {
   employeeId: string;
   employeeName: string;
   collectionEnabled: boolean;
+  compact?: boolean;
   onSent: () => void;
+  onLiveChange?: (live: boolean) => void;
   setToast: (msg: string) => void;
 }) {
   const [liveRunning, setLiveRunning] = useState(false);
@@ -799,7 +992,7 @@ function PhonePanel({
     const key = `qalqan-device-${employeeId}`;
     let id = localStorage.getItem(key);
     if (!id) {
-      id = `web-${employeeId}-${Math.random().toString(36).slice(2, 10)}`;
+      id = `dev-${employeeId}-${Math.random().toString(36).slice(2, 10)}`;
       localStorage.setItem(key, id);
     }
     return id;
@@ -812,7 +1005,12 @@ function PhonePanel({
   }, []);
 
   useEffect(() => {
+    onLiveChange?.(liveRunning);
+  }, [liveRunning, onLiveChange]);
+
+  useEffect(() => {
     return () => {
+      onLiveChange?.(false);
       if (watchRef.current != null && navigator.geolocation) {
         navigator.geolocation.clearWatch(watchRef.current);
       }
@@ -823,7 +1021,7 @@ function PhonePanel({
         );
       }
     };
-  }, []);
+  }, [onLiveChange]);
 
   function pushLog(line: string) {
     setLog((prev) => [line, ...prev].slice(0, 16));
@@ -965,32 +1163,44 @@ function PhonePanel({
   }
 
   return (
-    <section className="grid gap-4 lg:grid-cols-2">
+    <section className={cn("grid gap-4", !compact && "lg:grid-cols-2")}>
       <div>
-        <h2 className="section-title">Живой GPS</h2>
+        <h2 className="section-title">
+          {compact ? "Геолокация" : "Живой GPS"}
+        </h2>
         <p className="section-lead">
           {nativeApp
-            ? `Мобильное приложение: фоновый GPS для ${employeeName} (можно свернуть).`
-            : `Браузер: GPS только при открытой вкладке. Для фона установите приложение QALQAN (см. mobile/README).`}
+            ? `Фоновый GPS для ${employeeName}. Включите и сверните приложение — трек продолжается.`
+            : compact
+              ? "В браузере GPS работает только пока экран открыт. Для фона поставьте приложение QALQAN."
+              : `Браузер: GPS только при открытой вкладке. Для фона установите приложение QALQAN (см. mobile/README).`}
         </p>
         <div className="mt-4 space-y-3 border border-[var(--line)] bg-[var(--panel)] p-4">
           <p className="text-sm text-[var(--muted)]">
             {collectionEnabled
               ? nativeApp
-                ? "Сбор включён · режим: фон (Capacitor)"
+                ? liveRunning
+                  ? "Сбор идёт · можно свернуть телефон"
+                  : "Сбор разрешён · нажмите кнопку ниже"
                 : "Сбор включён · режим: браузер"
-              : "Сбор выключен — админ включает в Настройках"}
+              : "Сбор выключен — попросите админа включить в Настройках"}
           </p>
+          {nativeApp && (
+            <p className="text-xs text-[var(--muted)]">
+              Android: в настройках батареи для QALQAN выберите «Без ограничений».
+              iOS: Геолокация → «Всегда».
+            </p>
+          )}
           {lastFix && (
             <p className="text-sm">
               Последняя фиксация:{" "}
               <span className="text-[var(--ink)]">{lastFix}</span>
             </p>
           )}
-          <div className="flex flex-wrap gap-2">
+          <div className={cn("flex gap-2", compact ? "flex-col" : "flex-wrap")}>
             {!liveRunning ? (
               <button
-                className="btn"
+                className={cn("btn", compact && "w-full py-3 text-base")}
                 type="button"
                 onClick={() => void startLive()}
               >
@@ -998,7 +1208,7 @@ function PhonePanel({
               </button>
             ) : (
               <button
-                className="btn-danger"
+                className={cn("btn-danger", compact && "w-full py-3 text-base")}
                 type="button"
                 onClick={() => void stopLive()}
               >
@@ -1006,7 +1216,7 @@ function PhonePanel({
               </button>
             )}
             <button
-              className="btn-ghost"
+              className={cn("btn-ghost", compact && "w-full")}
               type="button"
               onClick={() => {
                 if (!navigator.geolocation) {

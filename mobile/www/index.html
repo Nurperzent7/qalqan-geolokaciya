@@ -4,23 +4,64 @@
     <meta charset="utf-8" />
     <meta
       name="viewport"
-      content="viewport-fit=cover, width=device-width, initial-scale=1"
+      content="viewport-fit=cover, width=device-width, initial-scale=1, maximum-scale=1"
     />
+    <meta name="theme-color" content="#1f4b3a" />
     <title>QALQAN Геолокация</title>
     <style>
+      :root {
+        color-scheme: light;
+      }
+      html,
       body {
-        font-family: system-ui, sans-serif;
-        margin: 2rem;
-        color: #1a2e24;
-        background: #f3efe6;
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: env(safe-area-inset-top) env(safe-area-inset-right)
+          env(safe-area-inset-bottom) env(safe-area-inset-left);
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: #1a1a1a;
+        background:
+          radial-gradient(circle at 12% 8%, rgba(31, 75, 58, 0.12), transparent 36%),
+          linear-gradient(160deg, #f3efe6, #ebe4d6);
+      }
+      .card {
+        max-width: 22rem;
+        padding: 1.5rem;
+        text-align: center;
+      }
+      .brand {
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-size: 0.85rem;
+        color: #1f4b3a;
+      }
+      h1 {
+        margin: 0.5rem 0 0.75rem;
+        font-size: 1.5rem;
+        font-weight: 650;
+      }
+      p {
+        margin: 0;
+        font-size: 0.95rem;
+        line-height: 1.45;
+        color: #6b655c;
       }
     </style>
   </head>
   <body>
-    <h1>QALQAN</h1>
-    <p>
-      Оболочка Capacitor. В релизе WebView открывает
-      https://qalqan-geolokaciya.apps.grok.bot
-    </p>
+    <div class="card">
+      <div class="brand">QALQAN</div>
+      <h1>Геолокация</h1>
+      <p>
+        Открываем приложение… Если экран долго не меняется — проверьте интернет.
+        Рабочий адрес:
+        qalqan-geolokaciya.apps.grok.bot
+      </p>
+    </div>
   </body>
 </html>

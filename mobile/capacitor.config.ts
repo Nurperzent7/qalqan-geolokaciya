@@ -21,9 +21,11 @@ const config = {
   },
   android: {
     allowMixedContent: false,
+    backgroundColor: "#ebe4d6",
   },
   ios: {
     contentInset: "automatic",
+    backgroundColor: "#ebe4d6",
   },
 } as const;
 
