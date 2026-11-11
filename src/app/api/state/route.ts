@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { guardRead, storeScopeFor } from "@/lib/api-guard";
-import { hasBitrixWebhook } from "@/lib/bitrix";
+import { bitrixPortalStatus, hasBitrixWebhook } from "@/lib/bitrix";
 import { todayDate } from "@/lib/calendar";
 import { hasDatabase } from "@/lib/db";
 import {
@@ -29,10 +29,14 @@ export async function GET(req: Request) {
   const punches = scopePunches(s.punches, auth);
   const cases = scopeCases(s.cases, s.visits, auth);
 
+  const portal = bitrixPortalStatus();
+
   return NextResponse.json({
     demo_date: workDate,
     work_date: workDate,
     bitrix_mode: hasBitrixWebhook() ? "live" : "mock",
+    bitrix_portal: portal.portalUrl,
+    bitrix_host: portal.host,
     persistence: hasDatabase() ? "postgres" : "memory",
     data_mode: "live",
     viewer: {
@@ -59,7 +63,7 @@ export async function GET(req: Request) {
     cases,
     viewer_id: auth.employeeId ?? s.viewerId,
     sample_notice: hasBitrixWebhook()
-      ? "Живой режим: сотрудники из Битрикс, GPS и отметки timeman через вебхук."
-      : "Живой режим без вебхука: задайте BITRIX_WEBHOOK_URL, чтобы подтянуть сотрудников и отметки.",
+      ? `Живой режим: портал ${portal.host} — сотрудники и timeman через вебхук.`
+      : `Нужен входящий вебхук с ${portal.host} (права user + timeman) в Secrets как BITRIX_WEBHOOK_URL.`,
   });
 }

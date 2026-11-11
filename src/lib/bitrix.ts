@@ -1,17 +1,44 @@
 /**
- * Bitrix24 client: timeman punches + employee roster via incoming webhook.
+ * Bitrix24 client for QALQAN Advisors portal.
+ * Portal: https://qalqanadvisors.bitrix24.kz/
+ * Uses incoming webhook (BITRIX_WEBHOOK_URL) for user.get + timeman.
  */
 
 import type { BitrixPunch, Employee, Role } from "./types";
 
+/** Canonical portal host — webhook must belong to this Bitrix24. */
+export const BITRIX_PORTAL_HOST = "qalqanadvisors.bitrix24.kz";
+export const BITRIX_PORTAL_URL = `https://${BITRIX_PORTAL_HOST}/`;
+
 export function hasBitrixWebhook(): boolean {
-  return Boolean(process.env.BITRIX_WEBHOOK_URL?.trim());
+  return Boolean(webhookBase());
 }
 
 function webhookBase(): string | null {
-  const raw = process.env.BITRIX_WEBHOOK_URL?.trim();
+  const raw = process.env.BITRIX_WEBHOOK_URL?.trim().replace(/^["']|["']$/g, "");
   if (!raw) return null;
-  return raw.replace(/\/$/, "");
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "https:") return null;
+    if (u.hostname.toLowerCase() !== BITRIX_PORTAL_HOST) return null;
+    // Expect …/rest/<userId>/<token> or …/rest/<userId>/<token>/
+    if (!u.pathname.includes("/rest/")) return null;
+    return `${u.origin}${u.pathname}`.replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
+
+export function bitrixPortalStatus(): {
+  configured: boolean;
+  host: string;
+  portalUrl: string;
+} {
+  return {
+    configured: Boolean(webhookBase()),
+    host: BITRIX_PORTAL_HOST,
+    portalUrl: BITRIX_PORTAL_URL,
+  };
 }
 
 async function bitrixCall<T>(

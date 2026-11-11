@@ -1,20 +1,22 @@
 # QALQAN · модуль геолокации (без Clockster)
 
-Живой учёт приходов и визитов. Сотрудники и отметки рабочего дня — из **Битрикс24**. Телефон шлёт GPS → офис / визиты / чистое время → `timeman.open` / `timeman.close`.
+Живой учёт приходов и визитов для портала **[qalqanadvisors.bitrix24.kz](https://qalqanadvisors.bitrix24.kz/)**. Телефон шлёт GPS → офис / визиты / чистое время → `timeman.open` / `timeman.close`.
 
 ## Живой режим
 
 - Общая база компании (Postgres на publish)
-- Список сотрудников подтягивается из Битрикс (`user.get`)
+- Сотрудники с этого Битрикс (`user.get`)
 - День = сегодня (Asia/Qyzylorda)
-- Вкладка **Телефон**: только реальный GPS (симуляция отключена)
-- Офис определяется по координатам, не по Wi‑Fi с телефона
+- Вкладка **Телефон**: только реальный GPS
+- Офис по координатам
 
 ## Секреты
 
 - **APP_ADMIN_TOKEN** — пароль админа
-- **BITRIX_WEBHOOK_URL** — входящий вебхук REST (`…/rest/1/xxx`) с правами `user` и `timeman`
-- **EMPLOYEE_PIN_HASHES** — опционально, JSON `{"bx-12":"salt:hash",…}` для входа сотрудников
+- **BITRIX_WEBHOOK_URL** — входящий вебхук именно с `qalqanadvisors.bitrix24.kz`  
+  (Разработчикам → Другое → Входящий вебхук → права **user** и **timeman**).  
+  Вид: `https://qalqanadvisors.bitrix24.kz/rest/1/xxxxxxxx/`
+- **EMPLOYEE_PIN_HASHES** — опционально, JSON `{"bx-12":"salt:hash",…}`
 
 ## Запуск локально
 

@@ -53,6 +53,8 @@ interface StatePayload {
   demo_date: string;
   work_date?: string;
   bitrix_mode: "live" | "mock";
+  bitrix_portal?: string;
+  bitrix_host?: string;
   persistence?: "postgres" | "memory";
   data_mode?: "live" | "demo";
   settings: Partial<GeoSettings> & Pick<GeoSettings, "work_window" | "lunch_window" | "draft_refresh_min">;
@@ -313,8 +315,8 @@ export default function GeoApp() {
           <p className="brand-mark">QALQAN · геолокация</p>
           <h1 className="mt-2 font-display text-2xl text-[var(--ink)]">Вход</h1>
           <p className="mt-2 text-sm text-[var(--muted)]">
-            Админ — пароль из Secrets приложения. Список сотрудников подтягивается
-            из вашего Битрикс после входа. Данные компании общие.
+            Админ — пароль из Secrets. Сотрудники и отметки — с портала{" "}
+            qalqanadvisors.bitrix24.kz после настройки вебхука.
           </p>
           <div className="mt-4 flex gap-2">
             <button
@@ -414,7 +416,9 @@ export default function GeoApp() {
               {isAdmin ? "Роль: админ" : `Роль: ${data.viewer.name}`}
             </span>
             <span className="chip">
-              {data.bitrix_mode === "mock" ? "Битрикс: демо" : "Битрикс: live"}
+              {data.bitrix_mode === "mock"
+                ? "Битрикс: нет вебхука"
+                : `Битрикс: ${data.bitrix_host || "live"}`}
             </span>
             <span className="chip">Режим: живой</span>
             <span className="chip">
