@@ -239,6 +239,37 @@ export async function ensureStoreReady(scopeId: string): Promise<StoreState> {
         ) {
           // Strip any persisted BSSIDs — unused and sensitive.
           snap.places = snap.places.map((p) => ({ ...p, bssid_list: [] }));
+          let dirty = false;
+          // Main office: Достык 180, БЦ Коктем (seed may have been Абая 52).
+          const officeSeed = PLACES.find((p) => p.id === "p-office");
+          if (officeSeed) {
+            snap.places = snap.places.map((p) => {
+              if (
+                !(
+                  p.type === "office" &&
+                  (p.id === "p-office" || p.name === "Офис QALQAN")
+                )
+              ) {
+                return p;
+              }
+              if (
+                p.address !== officeSeed.address ||
+                p.lat !== officeSeed.lat ||
+                p.lon !== officeSeed.lon
+              ) {
+                dirty = true;
+              }
+              return {
+                ...p,
+                name: officeSeed.name,
+                address: officeSeed.address,
+                lat: officeSeed.lat,
+                lon: officeSeed.lon,
+                radius_m: officeSeed.radius_m,
+                status: "approved" as const,
+              };
+            });
+          }
           if (!snap.pinHashes || typeof snap.pinHashes !== "object") {
             snap.pinHashes = {};
           }
@@ -246,6 +277,9 @@ export async function ensureStoreReady(scopeId: string): Promise<StoreState> {
           if (!snap.authV2) {
             snap.pinHashes = {};
             snap.authV2 = true;
+            dirty = true;
+          }
+          if (dirty) {
             await saveSnapshot(snapshotKey(scopeId), snap);
           }
           stores().set(scopeId, snap);

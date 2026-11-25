@@ -14,8 +14,8 @@ export const EMPLOYEES: Employee[] = [
     role: "employee",
     collection_enabled: true,
     consent_at: "2026-10-01T10:00:00+05:00",
-    last_lat: 43.2567,
-    last_lon: 76.9286,
+    last_lat: 43.2324,
+    last_lon: 76.9597,
     last_status: "В офисе",
     last_seen_at: "2026-11-10T18:55:00+05:00",
   },
@@ -82,9 +82,9 @@ export const PLACES: Place[] = [
     id: "p-office",
     type: "office",
     name: "Офис QALQAN",
-    address: "Алматы, пр. Абая 52",
-    lat: 43.2567,
-    lon: 76.9286,
+    address: "Алматы, пр. Достык 180, БЦ Коктем",
+    lat: 43.2324,
+    lon: 76.9597,
     radius_m: 75,
     source: "manual",
     status: "approved",
@@ -177,8 +177,8 @@ function pt(
 
 /** Sample track for Askar: office → smoke → court visit → shop → office */
 export function seedPointsForAskar(): RawPoint[] {
-  const office = { lat: 43.2567, lon: 76.9286 };
-  const yard = { lat: 43.2569, lon: 76.9291 };
+  const office = { lat: 43.2324, lon: 76.9597 };
+  const yard = { lat: 43.2326, lon: 76.9602 };
   const court = { lat: 43.2382, lon: 76.9455 };
   const shop = { lat: 43.242, lon: 76.938 };
   const points: RawPoint[] = [];
@@ -235,7 +235,7 @@ export function seedPointsForAskar(): RawPoint[] {
 }
 
 export function seedPointsForAnn(): RawPoint[] {
-  const office = { lat: 43.2567, lon: 76.9286 };
+  const office = { lat: 43.2324, lon: 76.9597 };
   const court = { lat: 43.2382, lon: 76.9455 };
   const points: RawPoint[] = [];
   for (const hm of ["09:15", "09:45", "10:15"]) {
@@ -253,7 +253,7 @@ export function seedPointsForAnn(): RawPoint[] {
 
 /** Aigerim: morning office → prosecutor visit → back */
 export function seedPointsForAigerim(): RawPoint[] {
-  const office = { lat: 43.2567, lon: 76.9286 };
+  const office = { lat: 43.2324, lon: 76.9597 };
   const prosecutor = { lat: 43.2501, lon: 76.9412 };
   const points: RawPoint[] = [];
   for (const hm of ["09:10", "09:40", "10:10", "10:40"]) {
