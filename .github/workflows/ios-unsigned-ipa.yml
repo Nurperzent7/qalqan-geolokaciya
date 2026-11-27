@@ -1,0 +1,69 @@
+# Unsigned iOS IPA for installing on ONE iPhone without a paid Apple Developer account.
+# The IPA is signed on the user's Windows PC by Sideloadly with a free Apple ID.
+# Instructions: mobile/IOS-FREE-ONE-PHONE.md
+#
+# Runs automatically when the iOS project changes, or manually:
+# GitHub → Actions → "iOS IPA без подписи (Sideloadly)" → Run workflow.
+# Result: Artifacts → QALQAN-unsigned-ipa (zip with QALQAN-unsigned.ipa inside).
+# macOS runners are free for public repositories.
+
+name: iOS IPA без подписи (Sideloadly)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/ios-unsigned-ipa.yml"
+      - "mobile/ios/**"
+      - "mobile/capacitor.config.ts"
+      - "mobile/package.json"
+      - "mobile/package-lock.json"
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install mobile deps
+        working-directory: mobile
+        run: npm ci
+
+      - name: Sync Capacitor iOS
+        working-directory: mobile
+        run: npx cap sync ios
+
+      - name: Build App.app without code signing
+        run: |
+          xcodebuild \
+            -project mobile/ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package IPA
+        run: |
+          APP="build/dd/Build/Products/Release-iphoneos/App.app"
+          test -d "$APP"
+          mkdir -p build/ipa/Payload
+          cp -R "$APP" build/ipa/Payload/
+          cd build/ipa
+          zip -qry ../QALQAN-unsigned.ipa Payload
+          ls -lh ../QALQAN-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QALQAN-unsigned-ipa
+          path: build/QALQAN-unsigned.ipa
+          retention-days: 30
