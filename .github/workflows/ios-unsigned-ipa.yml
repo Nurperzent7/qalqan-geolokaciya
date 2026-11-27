@@ -40,6 +40,8 @@ jobs:
 
       - name: Build App.app without code signing
         run: |
+          set -o pipefail
+          mkdir -p build
           xcodebuild \
             -project mobile/ios/App/App.xcodeproj \
             -scheme App \
@@ -50,7 +52,15 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            build
+            build 2>&1 | tee build/xcodebuild.log
+
+      # Build errors become public annotations, readable without signing in.
+      - name: Show build errors
+        if: failure()
+        run: |
+          grep -E "error:|fatal error|BUILD FAILED" build/xcodebuild.log | sort -u | head -30 | while IFS= read -r line; do
+            echo "::error title=xcodebuild::${line}"
+          done
 
       - name: Package IPA
         run: |

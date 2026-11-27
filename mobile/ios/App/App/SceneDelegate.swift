@@ -1,6 +1,9 @@
 import UIKit
 import Capacitor
 
+// Scene lifecycle for Capacitor 7.
+// Capacitor 7 has no SceneDelegateProxy (it appeared in Capacitor 8),
+// so URL opens are forwarded to ApplicationDelegateProxy instead.
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
 
@@ -11,14 +14,33 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window?.rootViewController = CAPBridgeViewController()
         window?.makeKeyAndVisible()
 
-        SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)
+        if let context = connectionOptions.urlContexts.first {
+            openURL(context)
+        }
+        if let activity = connectionOptions.userActivities.first {
+            continueActivity(activity)
+        }
     }
 
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
-        SceneDelegateProxy.shared.scene(scene, openURLContexts: URLContexts)
+        if let context = URLContexts.first {
+            openURL(context)
+        }
     }
 
     func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
-        SceneDelegateProxy.shared.scene(scene, continue: userActivity)
+        continueActivity(userActivity)
+    }
+
+    private func openURL(_ context: UIOpenURLContext) {
+        var options: [UIApplication.OpenURLOptionsKey: Any] = [:]
+        if let source = context.options.sourceApplication {
+            options[.sourceApplication] = source
+        }
+        _ = ApplicationDelegateProxy.shared.application(UIApplication.shared, open: context.url, options: options)
+    }
+
+    private func continueActivity(_ activity: NSUserActivity) {
+        _ = ApplicationDelegateProxy.shared.application(UIApplication.shared, continue: activity, restorationHandler: { _ in })
     }
 }
