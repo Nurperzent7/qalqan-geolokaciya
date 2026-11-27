@@ -10,8 +10,11 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
 
+        let bridgeController = CAPBridgeViewController()
+        NativeTracker.shared.attach(bridgeController)
+
         window = UIWindow(windowScene: windowScene)
-        window?.rootViewController = CAPBridgeViewController()
+        window?.rootViewController = bridgeController
         window?.makeKeyAndVisible()
 
         if let context = connectionOptions.urlContexts.first {
@@ -20,6 +23,10 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         if let activity = connectionOptions.userActivities.first {
             continueActivity(activity)
         }
+    }
+
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        NativeTracker.shared.appDidBecomeActive()
     }
 
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
